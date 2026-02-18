@@ -5,10 +5,16 @@
 #   - Accumulator-based fixed-step physics (never variable dt).
 #   - Frame time clamped to MAX_FRAME_TIME to prevent spiral-of-death.
 #   - VIDEORESIZE / RESIZABLE events update the camera scale.
+#   - GC is manually managed to eliminate random pause spikes.
+#   - F3 toggles a lightweight FPS/physics overlay.
 
 from __future__ import annotations
 
+import gc
+import os
 import sys
+import math
+import time
 import pygame
 
 from strata.config import FIXED_DT, MAX_FRAME_TIME
@@ -20,6 +26,41 @@ from strata.render.camera import Camera
 from strata.systems.physics_system import PhysicsSystem
 from strata.systems.render_system import RenderSystem
 from strata.systems.rig_system import RigSystem
+
+
+# ---------------------------------------------------------------------------
+# WSLg / WSL detection
+# ---------------------------------------------------------------------------
+
+def _is_wsl() -> bool:
+    """Return True if running inside WSL (any version)."""
+    try:
+        with open("/proc/version", "r") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+
+_ON_WSL: bool = _is_wsl()
+
+# WSLg caps its virtual display at 60Hz; vsync=True there locks us to 60Hz
+# while also adding compositor latency — counterproductive.  On WSL we
+# default to vsync=False and a 240fps cap so interpolation has room to work.
+_DEFAULT_VSYNC: bool = not _ON_WSL
+_DEFAULT_MAX_FPS: int = 240 if _ON_WSL else 0   # 0 = vsync-controlled on real displays
+
+
+# ---------------------------------------------------------------------------
+# Overlay font (lazy-initialised)
+# ---------------------------------------------------------------------------
+
+_overlay_font: pygame.font.Font | None = None
+
+def _get_overlay_font() -> pygame.font.Font:
+    global _overlay_font
+    if _overlay_font is None:
+        _overlay_font = pygame.font.SysFont("monospace", 16)
+    return _overlay_font
 
 
 class Scene(World):
@@ -66,7 +107,10 @@ class Game:
     window_size : initial window dimensions in pixels.
     title       : window caption.
     gravity     : world gravity vector (world units / s²).
-    max_fps     : cap real-time frame rate (0 = uncapped).
+    max_fps     : cap real-time frame rate (0 = vsync-controlled or uncapped).
+    vsync       : enable vsync.  Defaults to False on WSLg (where it causes
+                  extra compositor latency), True on real displays.
+    show_overlay: show FPS/physics HUD at startup. Toggle live with F3.
     """
 
     def __init__(
@@ -74,8 +118,9 @@ class Game:
         window_size: tuple[int, int] = (1024, 768),
         title: str = "STRATA",
         gravity: tuple[float, float] = (0.0, -9.81),
-        max_fps: int = 0,
-        vsync: bool = True,
+        max_fps: int = _DEFAULT_MAX_FPS,
+        vsync: bool = _DEFAULT_VSYNC,
+        show_overlay: bool = False,
     ) -> None:
         pygame.init()
 
@@ -83,6 +128,12 @@ class Game:
         self._title = title
         self._max_fps = max_fps
         self._vsync = vsync
+        self._show_overlay = show_overlay
+
+        # Disable automatic GC — we collect manually once per second to avoid
+        # random mid-frame pauses that cause perceived stutter.
+        gc.disable()
+        self._last_gc_time: float = time.monotonic()
 
         # Build display flags
         flags = pygame.RESIZABLE
@@ -130,8 +181,11 @@ class Game:
         """Enter the blocking game loop.  Returns only when the window is closed."""
         print("STRATA")
         print("Engineered with Stratakinesis")
+        if _ON_WSL:
+            print("[WSL detected] vsync disabled, frame cap:", self._max_fps or "uncapped")
 
         accumulator: float = 0.0
+        physics_steps_this_frame: int = 0
 
         running = True
         while running:
@@ -139,6 +193,9 @@ class Game:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_F3:
+                        self._show_overlay = not self._show_overlay
                 elif event.type == pygame.VIDEORESIZE:
                     new_size = (event.w, event.h)
                     flags = pygame.RESIZABLE
@@ -150,20 +207,71 @@ class Game:
                         self._surface = pygame.display.set_mode(new_size, flags)
                     self.camera.resize(new_size)
 
+            # --- Scheduled GC (once per second, between frames) ---
+            now = time.monotonic()
+            if now - self._last_gc_time >= 1.0:
+                gc.collect()
+                self._last_gc_time = now
+
             # --- Timing ---
             frame_time = self._clock.tick(self._max_fps)
             frame_time = min(frame_time, MAX_FRAME_TIME)  # clamp
 
             # --- Fixed-step physics ---
             accumulator += frame_time
+            physics_steps_this_frame = 0
             while accumulator >= FIXED_DT:
                 self.scene.update(FIXED_DT)
                 accumulator -= FIXED_DT
+                physics_steps_this_frame += 1
 
             # --- Render (pass alpha for sub-step interpolation) ---
             alpha = accumulator / FIXED_DT
             self.scene.draw(self._surface, self.camera, alpha)
+
+            # --- F3 overlay ---
+            if self._show_overlay:
+                self._draw_overlay(physics_steps_this_frame)
+
             pygame.display.flip()
 
+        gc.enable()   # restore GC on clean exit
         pygame.quit()
         sys.exit(0)
+
+    # ------------------------------------------------------------------
+    # F3 debug overlay
+    # ------------------------------------------------------------------
+
+    def _draw_overlay(self, physics_steps: int) -> None:
+        """Draw a minimal top-left HUD: FPS, frame time, physics steps, gravity."""
+        font = _get_overlay_font()
+        fps = self._clock.fps
+        gravity = self.physics.space.gravity
+        entity_count = len(self.scene.entities)
+        body_count = len(self.physics.space.bodies)
+        platform = "WSLg" if _ON_WSL else "native"
+        vsync_str = "on" if self._vsync else f"off (cap {self._max_fps or '∞'})"
+
+        lines = [
+            f"FPS        {fps:6.1f}",
+            f"entities   {entity_count}",
+            f"bodies     {body_count}",
+            f"phys steps {physics_steps}/frame",
+            f"gravity    ({gravity.x:.2f}, {gravity.y:.2f})",
+            f"vsync      {vsync_str}",
+            f"platform   {platform}",
+            f"[F3] hide",
+        ]
+
+        pad = 8
+        line_h = font.get_linesize()
+        box_w = 210
+        box_h = len(lines) * line_h + pad * 2
+        overlay = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 160))
+        self._surface.blit(overlay, (pad, pad))
+
+        for i, line in enumerate(lines):
+            surf = font.render(line, True, (200, 230, 200))
+            self._surface.blit(surf, (pad * 2, pad + i * line_h))

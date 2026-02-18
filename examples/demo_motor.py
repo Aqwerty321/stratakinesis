@@ -20,7 +20,7 @@ MOTOR_RATE = 8.0  # radians/second
 
 
 if __name__ == "__main__":
-    game = Game(window_size=(1024, 768), title="STRATA — demo_motor", vsync=True)
+    game = Game(window_size=(1024, 768), title="STRATA — demo_motor")
 
     # Ground
     ground = Sprite.rect(width=20.0, height=0.5, x=0.0, y=-3.5, static=True)
@@ -67,6 +67,9 @@ if __name__ == "__main__":
 
     import sys
     from strata.config import FIXED_DT, MAX_FRAME_TIME
+    from strata.core.loop import _ON_WSL
+    import gc
+    import time as _time
 
     pygame.init()
     accumulator = 0.0
@@ -76,12 +79,15 @@ if __name__ == "__main__":
     print("Engineered with Stratakinesis")
     print("LEFT/RIGHT: adjust motor speed  |  SPACE: reverse  |  ESC: quit")
 
-    # Cap at 240fps when vsync is unavailable to keep alpha deltas stable
-    _FALLBACK_CAP = 240
+    # Cap at 240fps when vsync unavailable (WSL) to keep alpha deltas stable
+    _FALLBACK_CAP = game._max_fps
 
+    gc.disable()
+    _last_gc = _time.monotonic()
     clock_obj = game._clock
     running = True
     rig: MotorRig = wheel.get_component(MotorRig)
+    show_overlay = game._show_overlay
 
     while running:
         for event in pygame.event.get():
@@ -90,6 +96,9 @@ if __name__ == "__main__":
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
+                elif event.key == pygame.K_F3:
+                    show_overlay = not show_overlay
+                    game._show_overlay = show_overlay
                 elif event.key == pygame.K_SPACE:
                     rig.target_rate *= -1.0
             elif event.type == pygame.VIDEORESIZE:
@@ -104,22 +113,34 @@ if __name__ == "__main__":
         if keys[pygame.K_LEFT]:
             rig.target_rate = max(rig.target_rate - 0.1, -20.0)
 
-        frame_time = min(clock_obj.tick(_FALLBACK_CAP if not game._vsync else 0), MAX_FRAME_TIME)
+        # GC: collect once per second between frames
+        _now = _time.monotonic()
+        if _now - _last_gc >= 1.0:
+            gc.collect()
+            _last_gc = _now
+
+        frame_time = min(clock_obj.tick(_FALLBACK_CAP), MAX_FRAME_TIME)
         accumulator += frame_time
+        phys_steps = 0
         while accumulator >= FIXED_DT:
             game.scene.update(FIXED_DT)
             accumulator -= FIXED_DT
+            phys_steps += 1
 
         alpha = accumulator / FIXED_DT
         game.scene.draw(game._surface, game.camera, alpha)
 
-        # HUD overlay
+        # Motor HUD (top-right)
         hud = font.render(
-            f"motor rate: {rig.target_rate:+.1f} rad/s  |  FPS: {clock_obj.fps:.0f}",
+            f"motor rate: {rig.target_rate:+.1f} rad/s  |  FPS: {clock_obj.fps:.0f}  | F3 overlay",
             True,
             (220, 220, 220),
         )
         game._surface.blit(hud, (12, 8))
+
+        if show_overlay:
+            game._draw_overlay(phys_steps)
+
         pygame.display.flip()
 
     pygame.quit()
