@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "mdemg": {
+      "command": "/home/aadit/mdemg/bin/mdemg-mcp",
+      "args": [],
+      "env": {
+        "MDEMG_ENDPOINT": "http://localhost:9999"
+      }
+    }
+  }
+}
