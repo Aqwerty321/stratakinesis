@@ -75,18 +75,24 @@ class Game:
         title: str = "STRATA",
         gravity: tuple[float, float] = (0.0, -9.81),
         max_fps: int = 0,
+        vsync: bool = True,
     ) -> None:
         pygame.init()
 
         self._window_size = window_size
         self._title = title
         self._max_fps = max_fps
+        self._vsync = vsync
 
-        # Surface — resizable window
-        self._surface = pygame.display.set_mode(
-            window_size,
-            pygame.RESIZABLE,
-        )
+        # Build display flags
+        flags = pygame.RESIZABLE
+
+        # Attempt vsync; fall back silently if the driver rejects it
+        try:
+            self._surface = pygame.display.set_mode(window_size, flags, vsync=1 if vsync else 0)
+        except pygame.error:
+            self._surface = pygame.display.set_mode(window_size, flags)
+            self._vsync = False
         pygame.display.set_caption(title)
 
         self._clock = Clock()
@@ -134,10 +140,14 @@ class Game:
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.VIDEORESIZE:
-                    # pygame-ce handles this automatically with RESIZABLE;
-                    # we just need to recompute the camera.
                     new_size = (event.w, event.h)
-                    self._surface = pygame.display.set_mode(new_size, pygame.RESIZABLE)
+                    flags = pygame.RESIZABLE
+                    try:
+                        self._surface = pygame.display.set_mode(
+                            new_size, flags, vsync=1 if self._vsync else 0
+                        )
+                    except pygame.error:
+                        self._surface = pygame.display.set_mode(new_size, flags)
                     self.camera.resize(new_size)
 
             # --- Timing ---

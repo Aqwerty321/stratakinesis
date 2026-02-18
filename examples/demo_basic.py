@@ -15,7 +15,7 @@ Run with:
 from strata import Game, Sprite
 
 if __name__ == "__main__":
-    game = Game(window_size=(1024, 768), title="STRATA — demo_basic")
+    game = Game(window_size=(1024, 768), title="STRATA — demo_basic", vsync=True)
 
     # A dynamic ball, starting 6 world-units above the origin
     ball = Sprite.circle(radius=0.6, x=0.0, y=6.0, density=1.0, physics=True)

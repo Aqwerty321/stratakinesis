@@ -23,6 +23,16 @@ _BG_COLOUR = (15, 15, 20)
 _WORLD_BG_COLOUR = (25, 25, 35)
 
 
+def _lerp_angle(prev: float, curr: float, alpha: float) -> float:
+    """Shortest-path lerp between two angles (radians).
+
+    Handles the ±π wrap-around so a body crossing the boundary doesn't
+    produce a single-frame reverse-spin artifact.
+    """
+    delta = (curr - prev + math.pi) % (2.0 * math.pi) - math.pi
+    return prev + alpha * delta
+
+
 class RenderSystem(System):
     """Clears the screen and draws every entity with Visual + Transform."""
 
@@ -72,8 +82,8 @@ class RenderSystem(System):
         # Build an interpolated transform for rendering — never mutates the real one
         rx = transform.prev_x + alpha * (transform.x - transform.prev_x)
         ry = transform.prev_y + alpha * (transform.y - transform.prev_y)
-        # Angle lerp (simple linear; fine for small-step sizes)
-        ra = transform.prev_angle + alpha * (transform.angle - transform.prev_angle)
+        # Shortest-path angle lerp to avoid ±π wrap artifacts
+        ra = _lerp_angle(transform.prev_angle, transform.angle, alpha)
         if visual.shape_type == "circle":
             self._draw_circle(surface, camera, visual, rx, ry, ra)
         else:

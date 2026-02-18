@@ -20,7 +20,7 @@ MOTOR_RATE = 8.0  # radians/second
 
 
 if __name__ == "__main__":
-    game = Game(window_size=(1024, 768), title="STRATA — demo_motor")
+    game = Game(window_size=(1024, 768), title="STRATA — demo_motor", vsync=True)
 
     # Ground
     ground = Sprite.rect(width=20.0, height=0.5, x=0.0, y=-3.5, static=True)
@@ -76,6 +76,9 @@ if __name__ == "__main__":
     print("Engineered with Stratakinesis")
     print("LEFT/RIGHT: adjust motor speed  |  SPACE: reverse  |  ESC: quit")
 
+    # Cap at 240fps when vsync is unavailable to keep alpha deltas stable
+    _FALLBACK_CAP = 240
+
     clock_obj = game._clock
     running = True
     rig: MotorRig = wheel.get_component(MotorRig)
@@ -101,7 +104,7 @@ if __name__ == "__main__":
         if keys[pygame.K_LEFT]:
             rig.target_rate = max(rig.target_rate - 0.1, -20.0)
 
-        frame_time = min(clock_obj.tick(0), MAX_FRAME_TIME)
+        frame_time = min(clock_obj.tick(_FALLBACK_CAP if not game._vsync else 0), MAX_FRAME_TIME)
         accumulator += frame_time
         while accumulator >= FIXED_DT:
             game.scene.update(FIXED_DT)

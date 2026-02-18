@@ -4,6 +4,8 @@
 import pytest
 from strata.render.camera import Camera
 from strata.config import WORLD_WIDTH, WORLD_HEIGHT
+from strata.systems.render_system import _lerp_angle
+import math
 
 
 class TestCameraScale:
@@ -64,3 +66,34 @@ class TestCoordinateConversions:
         cam.resize((800, 450))
         assert cam.scale != pytest.approx(scale_before)
         assert cam.scale == pytest.approx(scale_before / 2.0)
+
+
+class TestAngleLerp:
+    def test_normal_lerp(self):
+        assert _lerp_angle(0.0, 1.0, 0.5) == pytest.approx(0.5)
+
+    def test_alpha_zero_returns_prev(self):
+        assert _lerp_angle(0.3, 2.0, 0.0) == pytest.approx(0.3)
+
+    def test_alpha_one_returns_curr(self):
+        assert _lerp_angle(0.3, 2.0, 1.0) == pytest.approx(2.0)
+
+    def test_wrap_positive_to_negative(self):
+        """Crossing +π→−π should take the short path, not spin 350°."""
+        prev = math.pi - 0.1
+        curr = -(math.pi - 0.1)
+        result = _lerp_angle(prev, curr, 0.5)
+        # Short path: mid-point is near ±π, not near 0
+        assert abs(result) > math.pi / 2.0
+
+    def test_wrap_negative_to_positive(self):
+        prev = -(math.pi - 0.1)
+        curr = math.pi - 0.1
+        result = _lerp_angle(prev, curr, 0.5)
+        assert abs(result) > math.pi / 2.0
+
+    def test_no_overshoot_small_delta(self):
+        """Small delta should stay between prev and curr."""
+        prev, curr = 0.1, 0.4
+        result = _lerp_angle(prev, curr, 0.5)
+        assert prev <= result <= curr
