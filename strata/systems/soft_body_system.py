@@ -119,6 +119,23 @@ class SoftBodySystem(System):
             if not soft.nodes:
                 continue
 
+            # --- 0. NaN guard: if any node has NaN position, reset it ---
+            _has_nan = False
+            for body in soft.nodes:
+                px, py = body.position
+                if px != px or py != py:  # NaN check
+                    _has_nan = True
+                    break
+            if _has_nan:
+                # Reset all node velocities/forces to stop propagation
+                for body in soft.nodes:
+                    body.velocity = (0, 0)
+                    body.force = (0, 0)
+                    px, py = body.position
+                    if px != px or py != py:
+                        body.position = (transform.x, transform.y)
+                continue
+
             # --- 1. Internal pressure forces (anti-inversion) ---
             if soft.pressure > 0.0 and soft.rest_area > 0.0 and len(soft.surface_indices) >= 3:
                 self._apply_pressure(soft, dt)
@@ -213,8 +230,16 @@ class SoftBodySystem(System):
             fx = nx * force_magnitude * edge_len * 0.5
             fy = ny * force_magnitude * edge_len * 0.5
 
-            # Apply to both endpoints of this edge
+            # Cap per-edge force to prevent numerical explosion
+            f_mag = math.sqrt(fx * fx + fy * fy)
+            max_f = 500.0
+            if f_mag > max_f:
+                scale = max_f / f_mag
+                fx *= scale
+                fy *= scale
+
+            # Apply to both endpoints of this edge (world-space force)
             body_i = nodes[indices[i]]
             body_j = nodes[indices[j]]
-            body_i.apply_force_at_local_point((fx, fy), (0, 0))
-            body_j.apply_force_at_local_point((fx, fy), (0, 0))
+            body_i.apply_force_at_world_point((fx, fy), body_i.position)
+            body_j.apply_force_at_world_point((fx, fy), body_j.position)
