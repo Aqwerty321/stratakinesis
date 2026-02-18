@@ -1,194 +1,228 @@
-# STRATA — Engineered with Stratakinesis
+# STRATA -- Engineered with Stratakinesis
 
-**Strata** is a small, opinionated, deterministic 2D engine library (v0) built as a clean core so AI-assisted tools can generate the boilerplate.
-It uses pygame-ce for rendering and pymunk for physics. CuPy is an optional acceleration backend for batch math: CuPy.
-
-This README is intentionally prescriptive — copy it into the repo so your assistant (Claude / Copilot) can produce *exactly* the scaffolding and baseline integrations you need.
-
----
-
-## Quick pitch / tagline
-
-**Engineered with Stratakinesis**
-Deterministic, rigging-first 2D engine core — simple surface, rigorous internals.
-
----
-
-## Design principles (must-follow)
-
-* **Deterministic fixed-step simulation** (default `fixed_dt = 1/60`). Physics only steps at fixed dt via an accumulator.
-* **World units ≠ Screen pixels.** Camera performs uniform scale-to-fit. Aspect ratio is a boot-time config (immutable at runtime).
-* **Rigging as first-class data.** Rigs are declarative (data) and executed by RigSystems (logic).
-* **Visual detail ≠ Physics detail.** Visual polygons (density) are independent from physics shapes. Density (mass/area) applies to physics only.
-* **Tiny, approachable surface API** (Scratch-like defaults). Deep features are opt-in via systems/components.
-* **Minimal dependencies.** `pygame-ce`, `pymunk`, `numpy` (or `cupy` if available) only.
-
----
-
-## v0 scope (what to implement first)
-
-Strict, minimal feature list for V0:
-
-1. Package skeleton + `pyproject.toml`.
-2. Simple deterministic main loop with accumulator and clamp.
-3. World + Entity + Component minimal ECS (entities = id + component dict).
-4. Systems pipeline (ordered by priority).
-5. PhysicsSystem: thin wrapper around `pymunk.Space` with `step(fixed_dt)` and entity sync.
-6. RenderSystem: uses `pygame-ce` surfaces and `pygame.gfxdraw` for anti-aliased polygons.
-7. Camera with uniform scale-to-fit (Option 2 behavior) and conversions `world_to_screen`, `screen_to_world`.
-8. Basic shapes: `Sprite.circle()` and `Sprite.rect()` producing VisualShape and PhysicsShape; physics mass computed from `density * area`.
-9. Rig data model + RigSystem applying motor and property-binding rigs.
-10. One demo `examples/demo_basic.py` that spawns a ball (density visible), a ground, runs the sim with resizable window and scale-to-fit behavior.
-11. Optional backend abstraction `backend/array.py` that prefers CuPy (`xp`) then falls back to NumPy.
-
----
-
-## Non-goals for v0 (do not implement)
-
-* Editor, CLI scaffolding, SDK templates (SKSDK).
-* Runtime-changing aspect ratio or timestep.
-* Complex UI framework — the live tuner is optional and minimal (single toggle button).
-* Networked simulation / replay system.
-* Replacing `pymunk` physics with GPU physics.
-
----
-
-## Project layout (expected by boilerplate generator)
+**Strata** is a deterministic, rigging-first 2D engine library for Python.
+It uses pygame-ce for rendering, pymunk for physics, and numpy (or cupy) for batch math.
 
 ```
-strata/
-├── pyproject.toml
-├── README.md
-├── strata/
-│   ├── __init__.py
-│   ├── config.py            # ASPECT_RATIO, WORLD_WIDTH, FIXED_DT
-│   ├── core/
-│   │   ├── loop.py          # Game, run(), accumulator
-│   │   └── clock.py
-│   ├── ecs/
-│   │   ├── world.py
-│   │   ├── entity.py
-│   │   └── components.py
-│   ├── systems/
-│   │   ├── base.py
-│   │   ├── physics_system.py
-│   │   ├── render_system.py
-│   │   └── rig_system.py
-│   ├── backend/
-│   │   └── array.py         # xp = cupy|numpy
-│   ├── render/
-│   │   └── camera.py
-│   └── shapes/
-│       └── factory.py       # Sprite helpers (circle/rect/polygon)
-├── examples/
-│   └── demo_basic.py
-└── tests/
-    └── test_loop.py
+STRATA
+Engineered with Stratakinesis
 ```
 
 ---
 
-## Minimal public API sketch (what the CLI/AI should generate)
+## What it does
+
+- **Deterministic physics** -- fixed-timestep accumulator, never variable dt. Same inputs = same outputs.
+- **Minimal ECS** -- Entity (int ID + component dict), World/Scene, ordered Systems pipeline.
+- **Rig-first design** -- MotorRig, PropertyBinding, and more rigs coming. Behavior is data; systems interpret it.
+- **Render interpolation** -- sub-step alpha lerp with shortest-path angle interpolation. No jitter at any frame rate.
+- **Timestamped input buffer** -- events are stamped with `time.monotonic()` and delivered to the exact physics step they belong to via `on_fixed_update`.
+- **Hook API** -- `on_event`, `on_update`, `on_fixed_update`. Zero subclassing. Assign a function and go.
+- **F3 debug overlay** -- FPS, entity count, physics steps, gravity, vsync status, platform detection.
+- **WSL-aware** -- auto-detects WSLg, disables vsync (which adds compositor latency there), caps at 240fps.
+
+---
+
+## Quick start
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[gpu]"   # or just: pip install -e .
+
+python examples/demo_basic.py
+python examples/demo_motor.py
+```
+
+---
+
+## 10-line bouncing ball
 
 ```python
-# user code example (v0)
 from strata import Game, Sprite
 
 game = Game(window_size=(1024, 768))
-ball = Sprite.circle(radius=1.0, x=0.0, y=6.0, density=1.0, physics=True)
+ball = Sprite.circle(radius=1.0, x=0.0, y=5.0, density=1.0, physics=True)
 ground = Sprite.rect(width=20.0, height=1.0, x=0.0, y=-1.0, static=True)
 
 game.scene.add_entities(ball, ground)
 game.run()
 ```
 
-Notes for generator:
-
-* `radius`, `width`, `height` are in **world units**.
-* `density` is mass per unit area; internal code computes `mass = density * area` and calls `pymunk.moment_for_circle`/`moment_for_poly`.
-* `physics=True` means create a dynamic `pymunk.Body`; `static=True` creates a static body.
+All values are in **world units** (16x9 default viewport). The camera handles scale-to-fit. Window is resizable.
 
 ---
 
-## Implementation instructions for Claude / Copilot (actionable tasks)
+## Motor-driven wheel with input
 
-1. **Create package & deps**
+```python
+import pygame
+from strata import Game, Sprite
+from strata.ecs.components import MotorRig, Physics
+from strata.core.input_buffer import StampedEvent
 
-   * `pyproject.toml` with dependencies: `pygame-ce`, `pymunk`, `numpy`.
-   * Optional extras: `cupy` in `[project.optional-dependencies]` as `gpu`.
+game = Game(window_size=(1024, 768), title="Motor Demo")
 
-2. **Config**
+ground = Sprite.rect(width=20.0, height=0.5, y=-3.5, static=True)
+wheel  = Sprite.circle(radius=0.8, x=-5.0, y=-2.0, density=1.0, physics=True)
+wheel.get_component(Physics).shape.friction = 2.0
+wheel.add_component(MotorRig(target_rate=8.0, max_force=5e5))
 
-   * `config.py` defines `ASPECT_RATIO = (16, 9)` (project offers to change at boot) and `WORLD_WIDTH = 16.0`. Compute `WORLD_HEIGHT = WORLD_WIDTH * aspect_h/ aspect_w`. `FIXED_DT = 1/60`.
+game.scene.add_entities(ground, wheel)
 
-3. **Backend array**
+rig = wheel.get_component(MotorRig)
 
-   * `backend/array.py` tries import `cupy as xp` else `numpy as xp`. Expose `xp` and helpers `to_cpu(x)`.
+def on_fixed_update(dt: float, events: list[StampedEvent]) -> None:
+    for se in events:
+        if se.event.type == pygame.KEYDOWN and se.event.key == pygame.K_SPACE:
+            rig.target_rate *= -1.0
 
-4. **Core loop**
+def on_update(dt: float) -> None:
+    keys = game.input.poll_keys()
+    if keys[pygame.K_RIGHT]: rig.target_rate = min(rig.target_rate + 0.1, 20.0)
+    if keys[pygame.K_LEFT]:  rig.target_rate = max(rig.target_rate - 0.1, -20.0)
 
-   * `core/loop.py` implements `Game.run()`:
-
-     * initialize `pygame` and window resizable.
-     * main loop: `frame_time = clock.tick(max_fps)/1000.0` clamp to `0.25` → accumulator += frame_time; loop: while accumulator >= FIXED_DT: `scene.update(FIXED_DT)`; accumulator -= FIXED_DT; then `scene.draw()`; handle `VIDEORESIZE` to update viewport; clean polite exit.
-
-5. **ECS**
-
-   * `ecs/entity.py` simple `Entity(id)` with `components` dict and helper `add component`.
-   * `ecs/world.py` holds `entities`, `systems`, `rigs`, `add_entity`, `add_system`, `update(dt)`.
-
-6. **Systems**
-
-   * `physics_system.py`: wraps `pymunk.Space`, `space.step(fixed_dt)`, and sync transform component from physics body after step.
-   * `render_system.py`: draws `Transform` + `Visual` components using camera conversions; use `pygame.gfxdraw.filled_polygon` and `aapolygon` for outlines.
-   * `rig_system.py`: iterate declarative rigs and apply motor creation, property bindings, and simple event bindings.
-
-7. **Camera**
-
-   * `render/camera.py` implements `compute_scale(window_size)`, `world_to_screen`, `screen_to_world`, using uniform `scale = min(window_w / WORLD_WIDTH, window_h / WORLD_HEIGHT)` and center offset.
-
-8. **Shapes / Sprite factory**
-
-   * `shapes/factory.py` create `VisualShape` (dense polygon cache) and `PhysicsShape` (simple convex polygon / circle). Visual density param only affects visual vertices. Physics shape is basic (no user-facing complex poly building for v0).
-
-9. **Example**
-
-   * `examples/demo_basic.py` that spawns a ball and ground, prints boot banner:
-
-     ```
-     STRATA
-     Engineered with Stratakinesis
-     ```
-   * Demonstrates window resizing, scale-to-fit, stable physics.
-
-10. **Tests**
-
-    * `tests/test_loop.py` checks that `Game.run_step(dt)` updates world and does not mutate `WORLD_WIDTH/HEIGHT`.
-
----
-
-## How to run (for README)
-
-```bash
-# recommended (for dev)
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-pip install pygame-ce pymunk numpy
-
-# run example
-python examples/demo_basic.py
+game.on_fixed_update = on_fixed_update
+game.on_update = on_update
+game.run()
 ```
 
----
-
-## Developer notes / constraints to enforce in codegen
-
-* **Aspect ratio immutable** after config read.
-* **Physics stepping must use accumulator**. No direct `space.step(frame_time)` with variable dt.
-* **Do not** expose `pymunk.Space` or `Body` by default in the simple API; advanced users can access `.body` on the sprite to tweak.
-* `density` default = `1.0`. Use `math.pi * r * r` for circle area and polygon area via polygon area formula.
-* **Cache visual polygon vertices** and transform them for rendering; do not rebuild vertex arrays every frame.
-* Keep the first iteration minimal and well-tested; more features come later.
+`on_fixed_update` fires once per physics step with timestamped events. `on_update` fires once per render frame for continuous key polling. No raw game loop needed.
 
 ---
+
+## Hook API
+
+| Hook | When it fires | Use for |
+|---|---|---|
+| `game.on_event(event)` | Once per pygame event, after built-in handling (QUIT/ESC/F3/VIDEORESIZE already processed) | UI clicks, menu toggles, non-physics events |
+| `game.on_update(dt)` | Once per render frame, with raw frame_time before clamp | Continuous key polling, HUD updates, camera control |
+| `game.on_fixed_update(dt, events)` | Once per physics step inside the accumulator, with that step's `StampedEvent` slice | Discrete input (jump, fire, reverse), physics-affecting logic |
+
+All hooks are optional. Assign a callable or leave as `None`.
+
+---
+
+## Architecture
+
+```
+strata/
+  __init__.py          # exports: Game, Sprite, InputBuffer, StampedEvent
+  config.py            # ASPECT_RATIO, WORLD_WIDTH/HEIGHT, FIXED_DT, MAX_FRAME_TIME
+  backend/
+    array.py           # xp = cupy | numpy
+  core/
+    clock.py           # Clock with tick() and fps
+    input_buffer.py    # StampedEvent, InputBuffer (drain/consume/clear/poll_keys)
+    loop.py            # Game, Scene, run loop, hooks, F3 overlay
+  ecs/
+    entity.py          # Entity (int ID + component dict)
+    components.py      # Transform, Physics, Visual, MotorRig, PropertyBinding
+    world.py           # World (entity registry + systems), update/draw
+  systems/
+    base.py            # System base class
+    physics_system.py  # pymunk.Space wrapper, fixed-step, transform sync
+    render_system.py   # pygame-ce gfxdraw, interpolation, viewport culling
+    rig_system.py      # MotorRig execution, PropertyBinding mirroring
+  render/
+    camera.py          # Scale-to-fit, world_to_screen, screen_to_world
+  shapes/
+    factory.py         # Sprite.circle(), Sprite.rect(), density -> mass
+examples/
+  demo_basic.py        # Ball + ground
+  demo_motor.py        # Motor wheel + arrow keys + PropertyBinding follower
+tests/
+  test_loop.py         # Accumulator determinism, hooks
+  test_ecs.py          # Entity/World/Scene CRUD
+  test_camera.py       # Scale-to-fit, conversions, angle lerp
+  test_physics.py      # Gravity, sync, density -> mass
+  test_rig_system.py   # MotorRig, PropertyBinding, RigSystem
+  test_input_buffer.py # Drain, consume, clear, per-step delivery
+```
+
+21 Python files. ~2300 LOC. 78 tests.
+
+---
+
+## Systems pipeline
+
+Systems run in this order every fixed step:
+
+1. **PhysicsSystem** -- `space.step(FIXED_DT)`, then syncs pymunk body positions/angles to `Transform` components (snapshots `prev_*` before overwrite for interpolation)
+2. **RigSystem** -- creates/updates pymunk constraints for MotorRigs, mirrors Transform attributes via PropertyBindings (reads fresh post-physics transforms)
+3. **RenderSystem** -- draws entities using interpolated positions (`alpha = accumulator / FIXED_DT`) with shortest-path angle lerp and viewport culling
+
+---
+
+## Config
+
+| Constant | Default | Meaning |
+|---|---|---|
+| `ASPECT_RATIO` | `(16, 9)` | Boot-time only. Immutable. |
+| `WORLD_WIDTH` | `16.0` | World units across viewport |
+| `WORLD_HEIGHT` | `9.0` | Derived from aspect ratio |
+| `FIXED_DT` | `1/60` | Physics timestep (seconds) |
+| `MAX_FRAME_TIME` | `0.25` | Spiral-of-death clamp |
+
+---
+
+## Controls (built-in)
+
+| Key | Action |
+|---|---|
+| ESC | Quit |
+| F3 | Toggle debug overlay |
+
+---
+
+## Design constraints
+
+- `FIXED_DT` is the only physics timestep. No variable stepping.
+- Aspect ratio and world dimensions are immutable after boot.
+- Visual vertex arrays are cached at entity creation. Never rebuilt per frame.
+- `mass = density * area`. pymunk moment helpers compute inertia.
+- Rigs are data-only components. Systems interpret them. No logic in components.
+- All hooks are optional callables. No subclassing required.
+- Input goes through `InputBuffer` / `screen_to_world`. Raw pygame in userland is discouraged.
+
+---
+
+## Dependencies
+
+| Package | Purpose |
+|---|---|
+| `pygame-ce` | Rendering, window, events |
+| `pymunk` | 2D physics (Chipmunk) |
+| `numpy` | Array math (default backend) |
+| `cupy` (optional) | GPU-accelerated array math |
+
+---
+
+## Tests
+
+```bash
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy .venv/bin/pytest tests/ -q
+```
+
+78 passing. Covers: accumulator determinism, ECS CRUD, camera math, physics sync, rig execution, input buffer delivery, hook wiring.
+
+---
+
+## What's next
+
+See [VISION.md](VISION.md) for the full roadmap. Near-term:
+
+- **v0.2**: `Sprite.polygon()`, collision callbacks, scene management
+- **v0.3**: Audio system, sprite sheets, Tiled map importer
+- **v0.4**: SpringRig, HingeRig, SliderRig, rig composition
+- **v1.0**: Rollback netcode (InputBuffer is already timestamped and per-step)
+
+---
+
+## License
+
+MIT
+
+---
+
+**Engineered with Stratakinesis**
