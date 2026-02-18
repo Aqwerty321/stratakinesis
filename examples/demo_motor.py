@@ -25,6 +25,15 @@ if __name__ == "__main__":
     # Ground
     ground = Sprite.rect(width=20.0, height=0.5, x=0.0, y=-3.5, static=True)
 
+    # Invisible walls at world edges — stop the wheel from rolling off forever
+    from strata.config import WORLD_WIDTH, WORLD_HEIGHT
+    wall_h = WORLD_HEIGHT
+    wall_x = WORLD_WIDTH / 2.0 - 0.1
+    wall_left  = Sprite.rect(width=0.2, height=wall_h, x=-wall_x, y=0.0, static=True,
+                             color=(0, 0, 0, 0), outline=None)
+    wall_right = Sprite.rect(width=0.2, height=wall_h, x= wall_x, y=0.0, static=True,
+                             color=(0, 0, 0, 0), outline=None)
+
     # Wheel: a dynamic circle with a MotorRig attached.
     # High friction so it rolls on the ground instead of sliding.
     wheel = Sprite.circle(radius=0.8, x=-5.0, y=-2.0, density=1.0, physics=True)
@@ -50,7 +59,7 @@ if __name__ == "__main__":
         )
     )
 
-    game.scene.add_entities(ground, wheel, follower)
+    game.scene.add_entities(ground, wall_left, wall_right, wheel, follower)
 
     # Override run loop to handle arrow-key input each frame
     # We monkey-patch the event block by subclassing isn't needed — just show
