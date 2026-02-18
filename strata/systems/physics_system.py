@@ -3,7 +3,8 @@
 # Steps only at fixed_dt via the accumulator in the game loop.
 
 from __future__ import annotations
-import math
+
+from dataclasses import dataclass, field
 
 import pymunk
 
@@ -12,31 +13,131 @@ from strata.ecs.components import Physics, Transform
 from strata.ecs.world import World
 
 
+# ---------------------------------------------------------------------------
+# CollisionEvent
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CollisionEvent:
+    """A single collision begin or separation event between two entities.
+
+    ``entity_a_id`` and ``entity_b_id`` are the ECS entity IDs of the shapes
+    that collided.  Either may be -1 if the shape was not registered (e.g.
+    a sensor-only body or a shape added directly to the space).
+
+    ``normal`` is the collision normal unit vector pointing from B toward A.
+    For separation events the contact points are gone, so ``normal`` defaults
+    to ``(0.0, 0.0)``.
+    """
+    entity_a_id: int
+    entity_b_id: int
+    normal: tuple[float, float] = field(default=(0.0, 0.0))
+
+
+# ---------------------------------------------------------------------------
+# PhysicsSystem
+# ---------------------------------------------------------------------------
+
 class PhysicsSystem(System):
     """
     Manages the pymunk simulation.
 
     Responsibilities:
       1. Own the pymunk.Space instance.
-      2. Accept new bodies/shapes from the factory (add_body / add_shape).
-      3. Step the simulation exactly once per call to update().
-      4. Sync each entity's Transform from its physics body after the step.
+      2. Accept new bodies/shapes from the factory via register().
+      3. Apply collision layer/mask (ShapeFilter) on registration.
+      4. Map pymunk shapes back to ECS entity IDs for collision callbacks.
+      5. Buffer CollisionEvent objects during space.step(); Game.run() drains them.
+      6. Step the simulation exactly once per call to update().
+      7. Sync each entity's Transform from its physics body after the step.
     """
 
     def __init__(self, gravity: tuple[float, float] = (0.0, -9.81)) -> None:
         self.space: pymunk.Space = pymunk.Space()
         self.space.gravity = gravity
 
+        # shape → entity ID; populated in register()
+        self._shape_to_entity: dict[pymunk.Shape, int] = {}
+
+        # Collision event buffers; drained by Game after each physics step.
+        self._begin_events: list[CollisionEvent] = []
+        self._end_events: list[CollisionEvent] = []
+
+        # Register a default collision handler to capture all pair events.
+        # pymunk 7 API: space.on_collision(None, None, begin=fn, separate=fn)
+        # None, None = wildcard (any collision type pair).
+        self.space.on_collision(
+            None,
+            None,
+            begin=self._on_collision_begin,
+            separate=self._on_collision_separate,
+        )
+
     # ------------------------------------------------------------------
-    # Body / shape registration (called by factory at entity creation)
+    # Body / shape registration (called by Scene on entity add)
     # ------------------------------------------------------------------
 
-    def register(self, physics: Physics) -> None:
-        """Add a Physics component's body and shape to the pymunk space."""
+    def register(self, physics: Physics, entity_id: int = -1) -> None:
+        """Add a Physics component's body and shape to the pymunk space.
+
+        Parameters
+        ----------
+        physics   : the Physics component to register.
+        entity_id : the ECS entity ID; stored for collision-event lookup.
+                    Defaults to -1 (unregistered) for backward compatibility.
+        """
         if physics.body is not None:
             self.space.add(physics.body)
         if physics.shape is not None:
+            # Apply layer / mask bitmasks as a pymunk ShapeFilter.
+            physics.shape.filter = pymunk.ShapeFilter(
+                categories=physics.collision_layer,
+                mask=physics.collision_mask,
+            )
             self.space.add(physics.shape)
+            if entity_id >= 0:
+                self._shape_to_entity[physics.shape] = entity_id
+
+    # ------------------------------------------------------------------
+    # Collision event draining (called by Game.run() / Game.step())
+    # ------------------------------------------------------------------
+
+    def drain_begin_events(self) -> list[CollisionEvent]:
+        """Return and clear the list of collision-begin events from the last step."""
+        events = self._begin_events
+        self._begin_events = []
+        return events
+
+    def drain_end_events(self) -> list[CollisionEvent]:
+        """Return and clear the list of collision-end events from the last step."""
+        events = self._end_events
+        self._end_events = []
+        return events
+
+    # ------------------------------------------------------------------
+    # Internal pymunk collision callbacks
+    # ------------------------------------------------------------------
+
+    def _on_collision_begin(
+        self, arbiter: pymunk.Arbiter, space: pymunk.Space, data: dict
+    ) -> bool:
+        shape_a, shape_b = arbiter.shapes
+        eid_a = self._shape_to_entity.get(shape_a, -1)
+        eid_b = self._shape_to_entity.get(shape_b, -1)
+        cps = arbiter.contact_point_set
+        n = cps.normal
+        self._begin_events.append(
+            CollisionEvent(eid_a, eid_b, (float(n.x), float(n.y)))
+        )
+        return True  # True = process the collision normally (generate impulse)
+
+    def _on_collision_separate(
+        self, arbiter: pymunk.Arbiter, space: pymunk.Space, data: dict
+    ) -> None:
+        shape_a, shape_b = arbiter.shapes
+        eid_a = self._shape_to_entity.get(shape_a, -1)
+        eid_b = self._shape_to_entity.get(shape_b, -1)
+        self._end_events.append(CollisionEvent(eid_a, eid_b))
 
     # ------------------------------------------------------------------
     # System update

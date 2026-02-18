@@ -25,7 +25,7 @@ from strata.ecs.world import World
 from strata.ecs.entity import Entity
 from strata.ecs.components import Physics as _Physics
 from strata.render.camera import Camera
-from strata.systems.physics_system import PhysicsSystem
+from strata.systems.physics_system import PhysicsSystem, CollisionEvent
 from strata.systems.render_system import RenderSystem
 from strata.systems.rig_system import RigSystem
 
@@ -80,7 +80,7 @@ class Scene(World):
             return
         phys = entity.get_component(_Physics)
         if phys is not None:
-            self._physics_system.register(phys)
+            self._physics_system.register(phys, entity.id)
 
     def add_entity(self, entity: Entity) -> Entity:
         result = super().add_entity(entity)
@@ -181,6 +181,12 @@ class Game:
         # falls within that step's time window.  Use this for discrete, timing-
         # sensitive input (jump, fire, reverse) instead of on_event.
         self.on_fixed_update: Callable[[float, list[StampedEvent]], None] | None = None
+        # on_collision_begin: called after each physics step for every new
+        # contact that began in that step.  Receives a CollisionEvent.
+        self.on_collision_begin: Callable[[CollisionEvent], None] | None = None
+        # on_collision_end: called after each physics step for every contact
+        # that separated in that step.  Receives a CollisionEvent.
+        self.on_collision_end: Callable[[CollisionEvent], None] | None = None
 
         # Input buffer — replaces pygame.event.get() inside run().
         # Access as game.input for key-polling and event history.
@@ -193,6 +199,14 @@ class Game:
     def step(self, dt: float = FIXED_DT) -> None:
         """Advance the world by exactly one fixed step. Does not render."""
         self.scene.update(dt)
+        begin_events = self.physics.drain_begin_events()
+        end_events = self.physics.drain_end_events()
+        if self.on_collision_begin:
+            for ev in begin_events:
+                self.on_collision_begin(ev)
+        if self.on_collision_end:
+            for ev in end_events:
+                self.on_collision_end(ev)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -257,6 +271,15 @@ class Game:
                 if self.on_fixed_update:
                     self.on_fixed_update(FIXED_DT, step_events)
                 self.scene.update(FIXED_DT)
+                # Dispatch collision events from this physics step
+                begin_events = self.physics.drain_begin_events()
+                end_events = self.physics.drain_end_events()
+                if self.on_collision_begin:
+                    for ev in begin_events:
+                        self.on_collision_begin(ev)
+                if self.on_collision_end:
+                    for ev in end_events:
+                        self.on_collision_end(ev)
                 accumulator -= FIXED_DT
                 sim_time += FIXED_DT
                 physics_steps_this_frame += 1

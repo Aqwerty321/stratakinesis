@@ -56,6 +56,12 @@ class Physics(Component):
     shape: pymunk.Shape = field(default=None, repr=False)
     density: float = 1.0
     is_static: bool = False
+    # Collision layer bitmask: categories this shape belongs to.
+    # Applied as pymunk.ShapeFilter on registration.
+    collision_layer: int = 0xFFFF
+    # Collision mask bitmask: categories this shape will collide with.
+    # Two shapes collide only when (A.layer & B.mask) and (B.layer & A.mask) are both non-zero.
+    collision_mask: int = 0xFFFF
 
 
 # ---------------------------------------------------------------------------
