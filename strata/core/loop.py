@@ -20,6 +20,7 @@ import pygame
 
 from strata.config import FIXED_DT, MAX_FRAME_TIME
 from strata.core.clock import Clock
+from strata.core.input_buffer import InputBuffer, StampedEvent
 from strata.ecs.world import World
 from strata.ecs.entity import Entity
 from strata.ecs.components import Physics as _Physics
@@ -175,6 +176,15 @@ class Game:
         #   clamp) — use it for key-polling and any per-frame game logic.
         self.on_event:  Callable[[pygame.event.Event], None] | None = None
         self.on_update: Callable[[float], None] | None = None
+        # on_fixed_update: called once per physics step inside the accumulator
+        # loop, with the step dt and the list of StampedEvents whose timestamp
+        # falls within that step's time window.  Use this for discrete, timing-
+        # sensitive input (jump, fire, reverse) instead of on_event.
+        self.on_fixed_update: Callable[[float, list[StampedEvent]], None] | None = None
+
+        # Input buffer — replaces pygame.event.get() inside run().
+        # Access as game.input for key-polling and event history.
+        self.input: InputBuffer = InputBuffer()
 
     # ------------------------------------------------------------------
     # Public single-step method (useful for testing without a window)
@@ -197,11 +207,16 @@ class Game:
 
         accumulator: float = 0.0
         physics_steps_this_frame: int = 0
+        # sim_time tracks the monotonic wall-clock base of each physics step.
+        # consume() uses it to assign stamped events to the correct sub-step.
+        sim_time: float = time.monotonic()
 
         running = True
         while running:
-            # --- Event handling ---
-            for event in pygame.event.get():
+            # --- Event drain (stamped) ---
+            stamped_events = self.input.drain()
+            for se in stamped_events:
+                event = se.event
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
@@ -234,13 +249,19 @@ class Game:
                 self.on_update(frame_time)
             frame_time = min(frame_time, MAX_FRAME_TIME)  # clamp
 
-            # --- Fixed-step physics ---
+            # --- Fixed-step physics with per-step event delivery ---
             accumulator += frame_time
             physics_steps_this_frame = 0
             while accumulator >= FIXED_DT:
+                step_events = self.input.consume(sim_time, sim_time + FIXED_DT)
+                if self.on_fixed_update:
+                    self.on_fixed_update(FIXED_DT, step_events)
                 self.scene.update(FIXED_DT)
                 accumulator -= FIXED_DT
+                sim_time += FIXED_DT
                 physics_steps_this_frame += 1
+            # Drop events that fell past the last step boundary
+            self.input.clear()
 
             # --- Render (pass alpha for sub-step interpolation) ---
             alpha = accumulator / FIXED_DT

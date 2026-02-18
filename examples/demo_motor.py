@@ -7,7 +7,8 @@ Demonstrates:
   - MotorRig: declarative motor driving a wheel's angular velocity
   - PropertyBinding: mirroring a Transform attribute between entities
   - Live control: LEFT/RIGHT arrows adjust motor speed; SPACE reverses it
-  - game.on_event / game.on_update: per-event and per-frame hooks
+  - game.on_fixed_update: sample-accurate per-physics-step event delivery
+  - game.on_update: per-frame continuous key-state polling
 
 Run with:
     python examples/demo_motor.py
@@ -16,6 +17,7 @@ Run with:
 import pygame
 from strata import Game, Sprite
 from strata.ecs.components import MotorRig, Physics, PropertyBinding
+from strata.core.input_buffer import StampedEvent
 from strata.config import WORLD_WIDTH, WORLD_HEIGHT
 
 MOTOR_RATE = 8.0  # radians/second
@@ -52,18 +54,24 @@ if __name__ == "__main__":
 
     rig: MotorRig = wheel.get_component(MotorRig)
 
-    def on_event(event: pygame.event.Event) -> None:
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-            rig.target_rate *= -1.0
+    # on_fixed_update: called once per physics step with the events that
+    # occurred within that step's time window.  Ideal for discrete actions
+    # (SPACE to reverse) so they land on the exact step they were pressed.
+    def on_fixed_update(dt: float, events: list[StampedEvent]) -> None:
+        for se in events:
+            if se.event.type == pygame.KEYDOWN and se.event.key == pygame.K_SPACE:
+                rig.target_rate *= -1.0
 
+    # on_update: called once per rendered frame — right tool for continuous
+    # key-state polling (held LEFT/RIGHT).
     def on_update(dt: float) -> None:
-        keys = pygame.key.get_pressed()
+        keys = game.input.poll_keys()
         if keys[pygame.K_RIGHT]:
             rig.target_rate = min(rig.target_rate + 0.1, 20.0)
         if keys[pygame.K_LEFT]:
             rig.target_rate = max(rig.target_rate - 0.1, -20.0)
 
-    game.on_event  = on_event
+    game.on_fixed_update = on_fixed_update
     game.on_update = on_update
 
     print("LEFT/RIGHT: adjust motor speed  |  SPACE: reverse  |  ESC: quit  |  F3: overlay")
