@@ -140,5 +140,41 @@ class PropertyBinding(Component):
     enabled: bool = True
 
 
+# ---------------------------------------------------------------------------
+# Soft body
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SoftBody(Component):
+    """Holds the multi-body spring-mass mesh that forms a soft body.
+
+    A soft body is N point-mass ``pymunk.Body`` objects connected by
+    ``pymunk.DampedSpring`` constraints.  Only the *perimeter* nodes carry
+    ``pymunk.Circle`` collision shapes; interior nodes are invisible to
+    physics collisions (mass only).
+
+    Fields
+    ------
+    nodes          : all pymunk Bodies that make up the mesh.
+    springs        : all DampedSpring constraints between nodes.
+    surface_shapes : pymunk.Circle shapes on the perimeter nodes.
+    surface_indices: indices into ``nodes`` defining the CCW perimeter.
+    stiffness      : spring rest stiffness (N/world-unit).
+    damping        : spring damping coefficient.
+    node_radius    : collision radius of each perimeter node circle.
+    debug_render   : when True, render individual nodes+springs instead of mesh.
+    topology       : ``"grid"`` or ``"radial"`` — informational tag.
+    """
+    nodes: list = field(default_factory=list, repr=False)
+    springs: list = field(default_factory=list, repr=False)
+    surface_shapes: list = field(default_factory=list, repr=False)
+    surface_indices: list[int] = field(default_factory=list)
+    stiffness: float = 300.0
+    damping: float = 10.0
+    node_radius: float = 0.12
+    debug_render: bool = False
+    topology: str = "grid"
+
+
 # Convenience alias used by type hints elsewhere
 RigComponent = MotorRig | PropertyBinding

@@ -3,7 +3,8 @@
 #
 # Visual polygon vertices are cached at entity creation in *local* world-unit
 # space; this system transforms them to screen space each frame using the camera.
-# The vertex list is NEVER rebuilt per frame.
+# For soft bodies (shape_type="soft_polygon"), vertices are rebuilt every step
+# by SoftBodySystem and drawn without rotation.
 
 from __future__ import annotations
 import math
@@ -12,7 +13,7 @@ import pygame
 import pygame.gfxdraw
 
 from strata.systems.base import System
-from strata.ecs.components import Visual, Transform
+from strata.ecs.components import Visual, Transform, SoftBody
 from strata.ecs.world import World
 from strata.render.camera import Camera
 from strata.config import WORLD_WIDTH, WORLD_HEIGHT
@@ -65,7 +66,7 @@ class RenderSystem(System):
         for entity in world.get_entities_with(Visual, Transform):
             visual: Visual = entity.get_component(Visual)
             transform: Transform = entity.get_component(Transform)
-            self._draw_entity(surface, camera, visual, transform, alpha)
+            self._draw_entity(surface, camera, visual, transform, alpha, entity)
 
     # ------------------------------------------------------------------
     # Internal drawing helpers
@@ -78,6 +79,7 @@ class RenderSystem(System):
         visual: Visual,
         transform: Transform,
         alpha: float = 1.0,
+        entity=None,
     ) -> None:
         # Build an interpolated transform for rendering — never mutates the real one
         rx = transform.prev_x + alpha * (transform.x - transform.prev_x)
@@ -86,6 +88,12 @@ class RenderSystem(System):
         ra = _lerp_angle(transform.prev_angle, transform.angle, alpha)
         if visual.shape_type == "circle":
             self._draw_circle(surface, camera, visual, rx, ry, ra)
+        elif visual.shape_type == "soft_polygon":
+            soft = entity.get_component(SoftBody) if entity is not None else None
+            if soft is not None and soft.debug_render:
+                self._draw_soft_debug(surface, camera, soft, rx, ry)
+            else:
+                self._draw_soft_polygon(surface, camera, visual, rx, ry)
         else:
             self._draw_polygon(surface, camera, visual, rx, ry, ra)
 
@@ -151,3 +159,58 @@ class RenderSystem(System):
         if visual.outline is not None:
             outline = visual.outline[:4] if len(visual.outline) == 4 else (*visual.outline, 255)
             pygame.gfxdraw.aapolygon(surface, screen_pts, outline)
+
+    def _draw_soft_polygon(
+        self,
+        surface: pygame.Surface,
+        camera: Camera,
+        visual: Visual,
+        rx: float,
+        ry: float,
+    ) -> None:
+        """Draw soft body mesh — vertices are centroid-relative, no rotation."""
+        if not visual.vertices or len(visual.vertices) < 3:
+            return
+
+        screen_pts: list[tuple[int, int]] = []
+        for lx, ly in visual.vertices:
+            sx, sy = camera.world_to_screen(rx + lx, ry + ly)
+            screen_pts.append((sx, sy))
+
+        # Cull if entirely off-screen
+        w, h = surface.get_size()
+        if all(sx < 0 or sx > w or sy < 0 or sy > h for sx, sy in screen_pts):
+            return
+
+        color = visual.color[:4] if len(visual.color) == 4 else (*visual.color, 255)
+        pygame.gfxdraw.filled_polygon(surface, screen_pts, color)
+        if visual.outline is not None:
+            outline = visual.outline[:4] if len(visual.outline) == 4 else (*visual.outline, 255)
+            pygame.gfxdraw.aapolygon(surface, screen_pts, outline)
+
+    def _draw_soft_debug(
+        self,
+        surface: pygame.Surface,
+        camera: Camera,
+        soft: SoftBody,
+        rx: float,
+        ry: float,
+    ) -> None:
+        """Debug render: draw each node as a small circle and each spring as a line."""
+        node_color = (100, 255, 100, 200)
+        spring_color = (200, 200, 100, 140)
+
+        # Draw springs first (underneath nodes)
+        for spring in soft.springs:
+            a_pos = spring.a.position
+            b_pos = spring.b.position
+            ax, ay = camera.world_to_screen(a_pos.x, a_pos.y)
+            bx, by = camera.world_to_screen(b_pos.x, b_pos.y)
+            pygame.draw.line(surface, spring_color[:3], (ax, ay), (bx, by), 1)
+
+        # Draw nodes
+        r = max(2, camera.scale_length(soft.node_radius))
+        for body in soft.nodes:
+            cx, cy = camera.world_to_screen(body.position.x, body.position.y)
+            pygame.gfxdraw.filled_circle(surface, cx, cy, r, node_color)
+            pygame.gfxdraw.aacircle(surface, cx, cy, r, node_color[:3])

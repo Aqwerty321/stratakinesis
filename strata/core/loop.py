@@ -23,11 +23,12 @@ from strata.core.clock import Clock
 from strata.core.input_buffer import InputBuffer, StampedEvent
 from strata.ecs.world import World
 from strata.ecs.entity import Entity
-from strata.ecs.components import Physics as _Physics
+from strata.ecs.components import Physics as _Physics, SoftBody as _SoftBody
 from strata.render.camera import Camera
 from strata.systems.physics_system import PhysicsSystem, CollisionEvent
 from strata.systems.render_system import RenderSystem
 from strata.systems.rig_system import RigSystem
+from strata.systems.soft_body_system import SoftBodySystem
 
 
 # ---------------------------------------------------------------------------
@@ -66,21 +67,26 @@ def _get_overlay_font() -> pygame.font.Font:
 
 
 class Scene(World):
-    """World subclass that auto-registers Physics components on entity add.
+    """World subclass that auto-registers Physics and SoftBody components on entity add.
 
-    The ``physics_system`` reference is injected by Game after construction.
+    The ``physics_system`` and ``soft_body_system`` references are injected by
+    Game after construction.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self._physics_system: "PhysicsSystem | None" = None
+        self._soft_body_system: "SoftBodySystem | None" = None
 
     def _maybe_register(self, entity: Entity) -> None:
-        if self._physics_system is None:
-            return
-        phys = entity.get_component(_Physics)
-        if phys is not None:
-            self._physics_system.register(phys, entity.id)
+        if self._physics_system is not None:
+            phys = entity.get_component(_Physics)
+            if phys is not None:
+                self._physics_system.register(phys, entity.id)
+        if self._soft_body_system is not None:
+            soft = entity.get_component(_SoftBody)
+            if soft is not None:
+                self._soft_body_system.register(soft, entity.id)
 
     def add_entity(self, entity: Entity) -> Entity:
         result = super().add_entity(entity)
@@ -154,16 +160,18 @@ class Game:
 
         # Core systems wired in priority order
         self.physics: PhysicsSystem = PhysicsSystem(gravity=gravity)
+        self.soft_body: SoftBodySystem = SoftBodySystem(physics_system=self.physics)
         self._render: RenderSystem = RenderSystem()
         self._rig: RigSystem = RigSystem(physics_system=self.physics)
 
-        # Wire physics system into scene so add_entity/add_entities auto-register
+        # Wire systems into scene so add_entity/add_entities auto-register
         self.scene._physics_system = self.physics
+        self.scene._soft_body_system = self.soft_body
 
-        # System order: Physics first (establishes ground-truth transforms),
-        # then Rig (reads fresh transforms for bindings, updates motor rates for
-        # next step), then Render.
+        # System order: Physics first (steps pymunk space), then SoftBody
+        # (syncs node positions to Transform/Visual), then Rig, then Render.
         self.scene.add_system(self.physics)
+        self.scene.add_system(self.soft_body)
         self.scene.add_system(self._rig)
         self.scene.add_system(self._render)
 
