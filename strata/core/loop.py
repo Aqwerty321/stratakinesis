@@ -15,6 +15,7 @@ import os
 import sys
 import math
 import time
+from typing import Callable
 import pygame
 
 from strata.config import FIXED_DT, MAX_FRAME_TIME
@@ -165,6 +166,16 @@ class Game:
         self.scene.add_system(self._rig)
         self.scene.add_system(self._render)
 
+        # User-supplied hooks — assign callables after construction:
+        #   game.on_event  = lambda event: ...   # called per pygame event
+        #   game.on_update = lambda dt:    ...   # called once per rendered frame
+        # on_event  receives the raw pygame.event.Event after the engine has
+        #   already handled QUIT / F3 / VIDEORESIZE, so those are safe to ignore.
+        # on_update receives frame_time in seconds (raw, before MAX_FRAME_TIME
+        #   clamp) — use it for key-polling and any per-frame game logic.
+        self.on_event:  Callable[[pygame.event.Event], None] | None = None
+        self.on_update: Callable[[float], None] | None = None
+
     # ------------------------------------------------------------------
     # Public single-step method (useful for testing without a window)
     # ------------------------------------------------------------------
@@ -194,7 +205,9 @@ class Game:
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_F3:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                    elif event.key == pygame.K_F3:
                         self._show_overlay = not self._show_overlay
                 elif event.type == pygame.VIDEORESIZE:
                     new_size = (event.w, event.h)
@@ -206,6 +219,8 @@ class Game:
                     except pygame.error:
                         self._surface = pygame.display.set_mode(new_size, flags)
                     self.camera.resize(new_size)
+                if self.on_event:
+                    self.on_event(event)
 
             # --- Scheduled GC (once per second, between frames) ---
             now = time.monotonic()
@@ -215,6 +230,8 @@ class Game:
 
             # --- Timing ---
             frame_time = self._clock.tick(self._max_fps)
+            if self.on_update:
+                self.on_update(frame_time)
             frame_time = min(frame_time, MAX_FRAME_TIME)  # clamp
 
             # --- Fixed-step physics ---

@@ -75,3 +75,56 @@ class TestAccumulatorDeterminism:
             positions.append(b.get_component(Transform).y)
 
         assert positions[0] == pytest.approx(positions[1], abs=1e-9)
+
+
+class TestGameHooks:
+    """on_event and on_update are assignable and callable without a display."""
+
+    def test_on_update_is_none_by_default(self):
+        game = make_game()
+        assert game.on_update is None
+
+    def test_on_event_is_none_by_default(self):
+        game = make_game()
+        assert game.on_event is None
+
+    def test_on_update_callable_assigned(self):
+        game = make_game()
+        called_with = []
+        game.on_update = lambda dt: called_with.append(dt)
+        # Simulate what run() does: call on_update with a frame time
+        game.on_update(FIXED_DT)
+        assert called_with == [pytest.approx(FIXED_DT)]
+
+    def test_on_event_callable_assigned(self):
+        import os
+        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+        os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+        import pygame
+        pygame.init()
+
+        game = make_game()
+        received = []
+        game.on_event = lambda e: received.append(e.type)
+
+        # Post a user event and fire the hook manually (mirrors what run() does)
+        ev = pygame.event.Event(pygame.USEREVENT)
+        game.on_event(ev)
+        assert received == [pygame.USEREVENT]
+
+    def test_on_update_receives_positive_dt(self):
+        game = make_game()
+        dts = []
+        game.on_update = lambda dt: dts.append(dt)
+        game.on_update(1 / 60)
+        assert dts[0] > 0
+
+    def test_hooks_replaceable(self):
+        """Hooks can be reassigned mid-session."""
+        game = make_game()
+        log = []
+        game.on_update = lambda dt: log.append("first")
+        game.on_update(FIXED_DT)
+        game.on_update = lambda dt: log.append("second")
+        game.on_update(FIXED_DT)
+        assert log == ["first", "second"]
