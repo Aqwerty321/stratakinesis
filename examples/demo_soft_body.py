@@ -56,15 +56,15 @@ soft_entities: list = []
 def make_soft_rect(x: float = -2.5, y: float = 3.0):
     """Create a soft rectangle (grid topology)."""
     e = Sprite.soft_rect(
-        cols=5, rows=5,
+        cols=7, rows=7,
         width=2.0, height=2.0,
         x=x, y=y,
         density=0.8,
-        stiffness=350.0,
-        damping=12.0,
-        pressure=100.0,
-        velocity_damping=0.995,
-        node_radius=0.10,
+        stiffness=400.0,
+        damping=18.0,
+        pressure=150.0,
+        velocity_damping=0.992,
+        node_radius=0.08,
         color=(255, 140, 80, 200),
         outline=(255, 200, 140, 180),
     )
@@ -74,15 +74,15 @@ def make_soft_rect(x: float = -2.5, y: float = 3.0):
 def make_soft_circle(x: float = 2.5, y: float = 3.5):
     """Create a soft circle (radial topology)."""
     e = Sprite.soft_circle(
-        rings=3, segments=14,
+        rings=4, segments=20,
         radius=1.2,
         x=x, y=y,
         density=0.6,
-        stiffness=280.0,
-        damping=10.0,
-        pressure=120.0,
-        velocity_damping=0.993,
-        node_radius=0.09,
+        stiffness=350.0,
+        damping=16.0,
+        pressure=180.0,
+        velocity_damping=0.990,
+        node_radius=0.07,
         color=(100, 180, 255, 200),
         outline=(180, 220, 255, 180),
     )
