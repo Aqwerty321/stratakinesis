@@ -162,10 +162,11 @@ class SoftBody(Component):
     stiffness      : spring rest stiffness (N/world-unit).
     damping        : spring damping coefficient.
     node_radius    : collision radius of each perimeter node circle.
-    pressure       : internal pressure coefficient — resists volume loss.
-                     Higher values make the body resist compression more.
+    pressure       : internal pressure coefficient (legacy, unused by position solver).
     velocity_damping: per-step velocity multiplier (0..1). Prevents runaway.
     rest_area      : initial surface polygon area (computed at creation).
+    rest_angles    : initial interior angles at each surface vertex (radians).
+                     Computed at registration; used for angular strain resistance.
     debug_render   : when True, render individual nodes+springs instead of mesh.
     topology       : ``"grid"`` or ``"radial"`` — informational tag.
     """
@@ -179,6 +180,7 @@ class SoftBody(Component):
     pressure: float = 80.0
     velocity_damping: float = 0.995
     rest_area: float = 0.0
+    rest_angles: list[float] = field(default_factory=list, repr=False)
     debug_render: bool = False
     topology: str = "grid"
 
