@@ -500,66 +500,40 @@ class TestSignedArea:
 
 
 class TestPressureForces:
-    """Integration tests for internal pressure force behaviour."""
+    """Integration tests for position-based spring constraints and stability."""
 
-    def test_compressed_body_expands(self, physics, soft_body_sys):
-        """When nodes are pushed inward, pressure should push them back out."""
-        e = Sprite.soft_circle(
-            rings=2, segments=8, radius=1.0, x=0.0, y=0.0,
-            pressure=200.0, velocity_damping=0.99,
+    def test_stretched_spring_corrected(self, physics, soft_body_sys):
+        """Over-stretched springs should be corrected back within range."""
+        e = Sprite.soft_rect(
+            cols=2, rows=2, width=1.0, height=1.0, x=0.0, y=0.0,
         )
         sb = e.get_component(SoftBody)
         soft_body_sys.register(sb, e.id)
+        physics.space.gravity = (0, 0)
 
-        # Compress all outer nodes inward by 30%
-        for idx in sb.surface_indices:
-            bx, by = sb.nodes[idx].position
-            sb.nodes[idx].position = (bx * 0.7, by * 0.7)
+        # Pull two connected nodes far apart
+        sb.nodes[0].position = (-5.0, 0.0)
+        sb.nodes[1].position = (5.0, 0.0)
 
         from strata.ecs.world import World
         world = World()
         world.add_entity(e)
 
-        # Record compressed positions
-        compressed_dists = []
-        for idx in sb.surface_indices:
-            bx, by = sb.nodes[idx].position
-            compressed_dists.append(math.sqrt(bx**2 + by**2))
+        soft_body_sys.update(world, 1 / 60)
 
-        # Step several times — pressure should push nodes outward
-        for _ in range(30):
-            physics.space.step(1 / 60)
-            soft_body_sys.update(world, 1 / 60)
+        # After update, the distance should be much less than 10.0
+        ax, ay = sb.nodes[0].position
+        bx, by = sb.nodes[1].position
+        dist = math.sqrt((bx - ax)**2 + (by - ay)**2)
+        assert dist < 5.0, f"Nodes still too far apart: {dist:.2f}"
 
-        # Measure distances from centre
-        expanded_dists = []
-        cx, cy = 0.0, 0.0
-        for body in sb.nodes:
-            cx += body.position.x
-            cy += body.position.y
-        cx /= len(sb.nodes)
-        cy /= len(sb.nodes)
-
-        for idx in sb.surface_indices:
-            bx, by = sb.nodes[idx].position
-            expanded_dists.append(math.sqrt((bx - cx)**2 + (by - cy)**2))
-
-        # Average distance should increase (nodes pushed outward)
-        avg_compressed = sum(compressed_dists) / len(compressed_dists)
-        avg_expanded = sum(expanded_dists) / len(expanded_dists)
-        assert avg_expanded > avg_compressed, \
-            f"Pressure should expand compressed body: {avg_expanded:.3f} <= {avg_compressed:.3f}"
-
-    def test_no_pressure_when_at_rest_area(self, physics, soft_body_sys):
-        """No pressure forces when body is at or above rest area."""
+    def test_no_correction_at_rest(self, physics, soft_body_sys):
+        """No position correction when body is at rest configuration."""
         e = Sprite.soft_rect(
             cols=2, rows=2, width=1.0, height=1.0, x=0.0, y=0.0,
-            pressure=100.0,
         )
         sb = e.get_component(SoftBody)
         soft_body_sys.register(sb, e.id)
-
-        # Zero gravity, body at rest — no compression
         physics.space.gravity = (0, 0)
         for body in sb.nodes:
             body.velocity = (0, 0)
@@ -570,10 +544,8 @@ class TestPressureForces:
 
         positions_before = [(b.position.x, b.position.y) for b in sb.nodes]
         soft_body_sys.update(world, 1 / 60)
-        physics.space.step(1 / 60)
         positions_after = [(b.position.x, b.position.y) for b in sb.nodes]
 
-        # Nodes should barely move (only spring forces, which are at rest length)
         for (bx, by), (ax, ay) in zip(positions_before, positions_after):
             assert abs(ax - bx) < 0.05
             assert abs(ay - by) < 0.05

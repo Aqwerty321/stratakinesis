@@ -3,12 +3,12 @@
 # Space, syncs node positions → Visual.vertices + Transform centroid each step,
 # and provides clean teardown on entity removal.
 #
-# Anti-inversion measures:
-#   1. Internal pressure forces — compute signed surface area via shoelace,
-#      push surface nodes outward along edge normals when area shrinks below
-#      rest_area.  This prevents mesh collapse/inversion on impact.
-#   2. Per-node velocity damping — multiplies velocity by a factor < 1 each
-#      step to prevent runaway energy buildup.
+# Stability measures (position-based, not force-based):
+#   1. Spring length enforcement — after each physics step, if any spring
+#      has stretched beyond max_stretch × rest_length, directly correct both
+#      endpoint positions back within range (XPBD-style).
+#   2. Hard velocity cap — per-node speed is clamped every update.
+#   3. Velocity damping — gentle multiplier each step to bleed energy.
 
 from __future__ import annotations
 import math
@@ -33,6 +33,12 @@ def _signed_area(positions: list[tuple[float, float]]) -> float:
         x2, y2 = positions[(i + 1) % n]
         total += x1 * y2 - x2 * y1
     return total / 2.0
+
+
+# Maximum a spring may stretch relative to rest_length before position correction
+_MAX_STRETCH = 1.8
+# Hard speed cap for any node (world units / second)
+_MAX_SPEED = 12.0
 
 
 class SoftBodySystem(System):
@@ -110,7 +116,7 @@ class SoftBodySystem(System):
     # ------------------------------------------------------------------
 
     def update(self, world: World, dt: float) -> None:
-        """Apply pressure forces, velocity damping, then sync visuals."""
+        """Enforce spring constraints, clamp velocities, then sync visuals."""
         for entity in world.get_entities_with(SoftBody, Transform, Visual):
             soft: SoftBody = entity.get_component(SoftBody)
             transform: Transform = entity.get_component(Transform)
@@ -119,15 +125,14 @@ class SoftBodySystem(System):
             if not soft.nodes:
                 continue
 
-            # --- 0. NaN guard: if any node has NaN position, reset it ---
+            # --- 0. NaN guard ---
             _has_nan = False
             for body in soft.nodes:
                 px, py = body.position
-                if px != px or py != py:  # NaN check
+                if px != px or py != py:
                     _has_nan = True
                     break
             if _has_nan:
-                # Reset all node velocities/forces to stop propagation
                 for body in soft.nodes:
                     body.velocity = (0, 0)
                     body.force = (0, 0)
@@ -136,19 +141,58 @@ class SoftBodySystem(System):
                         body.position = (transform.x, transform.y)
                 continue
 
-            # --- 1. Internal pressure forces (anti-inversion) ---
-            if soft.pressure > 0.0 and soft.rest_area > 0.0 and len(soft.surface_indices) >= 3:
-                self._apply_pressure(soft, dt)
+            # --- 1. Position-based spring length enforcement ---
+            # If any spring is over-stretched, pull endpoints back.
+            # Two passes for convergence.
+            for _pass in range(2):
+                for spring in soft.springs:
+                    a = spring.a
+                    b = spring.b
+                    ax, ay = a.position
+                    bx, by = b.position
+                    dx = bx - ax
+                    dy = by - ay
+                    dist = math.sqrt(dx * dx + dy * dy)
+                    max_len = spring.rest_length * _MAX_STRETCH
+                    if dist > max_len and dist > 1e-8:
+                        # How much to correct
+                        overshoot = dist - max_len
+                        nx = dx / dist
+                        ny = dy / dist
+                        # Split correction based on inverse mass
+                        total_mass = a.mass + b.mass
+                        ra = a.mass / total_mass  # heavier moves less
+                        rb = b.mass / total_mass
+                        half = overshoot * 0.5
+                        a.position = (ax + nx * half * rb * 2, ay + ny * half * rb * 2)
+                        b.position = (bx - nx * half * ra * 2, by - ny * half * ra * 2)
+                        # Kill the stretch velocity component
+                        va_dot = a.velocity.x * nx + a.velocity.y * ny
+                        vb_dot = b.velocity.x * nx + b.velocity.y * ny
+                        if va_dot < 0:  # moving away from b
+                            pass
+                        else:
+                            a.velocity = (
+                                a.velocity.x - nx * va_dot * 0.5,
+                                a.velocity.y - ny * va_dot * 0.5,
+                            )
+                        if vb_dot > 0:  # moving away from a
+                            pass
+                        else:
+                            b.velocity = (
+                                b.velocity.x - nx * vb_dot * 0.5,
+                                b.velocity.y - ny * vb_dot * 0.5,
+                            )
 
             # --- 2. Velocity damping + hard speed clamp ---
-            max_speed = 15.0
             damp = soft.velocity_damping
+            max_speed_sq = _MAX_SPEED * _MAX_SPEED
             for body in soft.nodes:
                 vx = body.velocity.x * damp
                 vy = body.velocity.y * damp
                 speed_sq = vx * vx + vy * vy
-                if speed_sq > max_speed * max_speed:
-                    s = max_speed / math.sqrt(speed_sq)
+                if speed_sq > max_speed_sq:
+                    s = _MAX_SPEED / math.sqrt(speed_sq)
                     vx *= s
                     vy *= s
                 body.velocity = (vx, vy)
@@ -178,79 +222,3 @@ class SoftBodySystem(System):
                 by = soft.nodes[idx].position.y
                 new_verts.append((bx - cx, by - cy))
             visual.vertices = new_verts
-
-    # ------------------------------------------------------------------
-    # Pressure force (volume preservation)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _apply_pressure(soft: SoftBody, dt: float) -> None:
-        """Push surface nodes outward when the mesh area drops below rest_area.
-
-        For each edge of the surface polygon, compute its outward normal and
-        apply a force proportional to ``pressure * (1 - current_area / rest_area)``
-        distributed along the edge's two endpoint nodes.
-
-        This acts like internal gas pressure: when the body compresses, it
-        pushes back.  When at or above rest area, no force is applied.
-        """
-        indices = soft.surface_indices
-        n = len(indices)
-        nodes = soft.nodes
-
-        # Current surface node positions
-        positions = [(nodes[idx].position.x, nodes[idx].position.y) for idx in indices]
-
-        current_area = _signed_area(positions)
-
-        # If area is inverted (CW winding), use a stronger correction
-        if current_area < 0:
-            # Area is inverted — very strong correction
-            ratio = 2.0
-        else:
-            ratio = 1.0 - current_area / soft.rest_area
-            if ratio <= 0.0:
-                return  # at or above rest area, no pressure needed
-
-        # Clamp ratio to prevent explosive forces
-        ratio = min(ratio, 1.5)
-
-        # Scale force by average node mass so acceleration is bounded
-        # regardless of how light individual nodes are.
-        # Target max acceleration from pressure ≈ 30 m/s² (~3× gravity)
-        node_mass = nodes[indices[0]].mass
-        max_accel = 30.0
-        force_magnitude = soft.pressure * ratio
-
-        # Apply force along each edge's outward normal, split between endpoints
-        for i in range(n):
-            j = (i + 1) % n
-            ax, ay = positions[i]
-            bx, by = positions[j]
-
-            # Edge vector
-            ex, ey = bx - ax, by - ay
-            edge_len = math.sqrt(ex * ex + ey * ey)
-            if edge_len < 1e-8:
-                continue
-
-            # Outward normal (for CCW polygon: perpendicular pointing outward)
-            nx, ny = -ey / edge_len, ex / edge_len
-
-            # Force proportional to edge length (pressure * area-deficit * edge)
-            fx = nx * force_magnitude * edge_len * 0.5
-            fy = ny * force_magnitude * edge_len * 0.5
-
-            # Cap force so per-node acceleration stays bounded
-            f_mag = math.sqrt(fx * fx + fy * fy)
-            max_f = max_accel * node_mass
-            if f_mag > max_f:
-                scale = max_f / f_mag
-                fx *= scale
-                fy *= scale
-
-            # Apply to both endpoints of this edge (world-space force)
-            body_i = nodes[indices[i]]
-            body_j = nodes[indices[j]]
-            body_i.apply_force_at_world_point((fx, fy), body_i.position)
-            body_j.apply_force_at_world_point((fx, fy), body_j.position)
