@@ -136,12 +136,22 @@ ghost_ledge.get_component(Physics).collision_mask  = GHOST_LAYER
 game.scene.add_entity(ghost_ledge)
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tracking (initialised before first shapes so startup entities are included)
+# ---------------------------------------------------------------------------
+
+dynamic_entities: list = []
+collision_count  = [0]
+
+# ---------------------------------------------------------------------------
 # Initial dynamic shapes
 # ---------------------------------------------------------------------------
 
 # Five shapes staggered above the ramps in a tight cluster
 for sx, sy in [(-0.9, 3.8), (0.3, 4.5), (-0.2, 5.2), (0.8, 4.0), (-1.5, 5.0)]:
-    game.scene.add_entity(make_shape(sx, sy))
+    e = make_shape(sx, sy)
+    game.scene.add_entity(e)
+    dynamic_entities.append(e)
 
 # Ghost ball — passes through ramps, lands only on ghost_ledge
 ghost_ball = Sprite.circle(radius=0.44, x=0.1, y=6.2, density=0.6,
@@ -149,13 +159,7 @@ ghost_ball = Sprite.circle(radius=0.44, x=0.1, y=6.2, density=0.6,
 ghost_ball.get_component(Physics).collision_layer = GHOST_LAYER
 ghost_ball.get_component(Physics).collision_mask  = GHOST_LAYER
 game.scene.add_entity(ghost_ball)
-
-# ---------------------------------------------------------------------------
-# Tracking
-# ---------------------------------------------------------------------------
-
-dynamic_entities: list = []
-collision_count  = [0]
+dynamic_entities.append(ghost_ball)
 
 ARENA_IDS = {floor.id, wall_l.id, wall_r.id,
              left_ramp.id, right_ramp.id, shelf_l.id, shelf_r.id}
@@ -204,9 +208,15 @@ def on_event(event: pygame.event.Event) -> None:
     elif event.key == pygame.K_r:
         for e in list(dynamic_entities):
             p = e.get_component(Physics)
-            if p and p.body in game.physics.space.bodies:
-                game.physics.space.remove(p.body, p.shape)
-            game.scene.entities.pop(e.id, None)
+            if p:
+                to_remove = []
+                if p.shape is not None and p.shape in game.physics.space.shapes:
+                    to_remove.append(p.shape)
+                if p.body is not None and p.body in game.physics.space.bodies:
+                    to_remove.append(p.body)
+                if to_remove:
+                    game.physics.space.remove(*to_remove)
+            game.scene.remove_entity(e)
         dynamic_entities.clear()
         collision_count[0] = 0
         spawn_timer[0] = 0.0
