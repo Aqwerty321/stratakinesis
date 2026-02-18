@@ -140,13 +140,18 @@ class SoftBodySystem(System):
             if soft.pressure > 0.0 and soft.rest_area > 0.0 and len(soft.surface_indices) >= 3:
                 self._apply_pressure(soft, dt)
 
-            # --- 2. Velocity damping ---
-            if soft.velocity_damping < 1.0:
-                for body in soft.nodes:
-                    body.velocity = (
-                        body.velocity.x * soft.velocity_damping,
-                        body.velocity.y * soft.velocity_damping,
-                    )
+            # --- 2. Velocity damping + hard speed clamp ---
+            max_speed = 15.0
+            damp = soft.velocity_damping
+            for body in soft.nodes:
+                vx = body.velocity.x * damp
+                vy = body.velocity.y * damp
+                speed_sq = vx * vx + vy * vy
+                if speed_sq > max_speed * max_speed:
+                    s = max_speed / math.sqrt(speed_sq)
+                    vx *= s
+                    vy *= s
+                body.velocity = (vx, vy)
 
             # --- 3. Compute centroid of all nodes ---
             cx, cy = 0.0, 0.0
@@ -208,7 +213,13 @@ class SoftBodySystem(System):
                 return  # at or above rest area, no pressure needed
 
         # Clamp ratio to prevent explosive forces
-        ratio = min(ratio, 3.0)
+        ratio = min(ratio, 1.5)
+
+        # Scale force by average node mass so acceleration is bounded
+        # regardless of how light individual nodes are.
+        # Target max acceleration from pressure ≈ 30 m/s² (~3× gravity)
+        node_mass = nodes[indices[0]].mass
+        max_accel = 30.0
         force_magnitude = soft.pressure * ratio
 
         # Apply force along each edge's outward normal, split between endpoints
@@ -230,9 +241,9 @@ class SoftBodySystem(System):
             fx = nx * force_magnitude * edge_len * 0.5
             fy = ny * force_magnitude * edge_len * 0.5
 
-            # Cap per-edge force to prevent numerical explosion
+            # Cap force so per-node acceleration stays bounded
             f_mag = math.sqrt(fx * fx + fy * fy)
-            max_f = 500.0
+            max_f = max_accel * node_mass
             if f_mag > max_f:
                 scale = max_f / f_mag
                 fx *= scale
