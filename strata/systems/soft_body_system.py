@@ -34,8 +34,41 @@ def _signed_area(positions: list[tuple[float, float]]) -> float:
     return total / 2.0
 
 
-# Hard speed cap for any node (world units / second)
-_MAX_SPEED = 20.0
+# Hard speed cap for any soft-body node (world units / second).
+# Keep ≤ 10 to prevent spring-network energy amplification in dense meshes.
+_MAX_SPEED = 8.0
+
+
+def _make_velocity_func(
+    damp: float, max_speed: float
+) -> "Callable":
+    """Return a per-substep velocity function for soft-body nodes.
+
+    pymunk calls ``body.velocity_func`` on every ``space.step()``.  By
+    applying velocity damping and speed clamping *every substep*, we prevent
+    energy from building up between the post-frame damping pass in
+    SoftBodySystem.update().
+    """
+    max_speed_sq = max_speed * max_speed
+
+    def _vel_func(
+        body: pymunk.Body,
+        gravity: tuple[float, float],
+        damping: float,
+        dt: float,
+    ) -> None:
+        # Default pymunk velocity update (gravity + space.damping)
+        pymunk.Body.update_velocity(body, gravity, damping, dt)
+        vx = body.velocity.x * damp
+        vy = body.velocity.y * damp
+        speed_sq = vx * vx + vy * vy
+        if speed_sq > max_speed_sq:
+            s = max_speed / math.sqrt(speed_sq)
+            vx *= s
+            vy *= s
+        body.velocity = (vx, vy)
+
+    return _vel_func
 
 
 class SoftBodySystem(System):
@@ -69,10 +102,21 @@ class SoftBodySystem(System):
         Self-clipping protection: all surface shapes of the same soft body
         share a non-zero ``ShapeFilter.group``, so pymunk never generates
         contacts between nodes of the same mesh.
+
+        Per-substep velocity function: each node gets a custom
+        ``velocity_func`` that applies damping and speed clamping on
+        *every* ``space.step()`` call, not just once per frame.
         """
         space = self._physics.space
 
+        # Create per-substep velocity function for this soft body's nodes.
+        # Convert the per-frame damping to per-substep: damp^(1/substeps).
+        substeps = getattr(self._physics, 'substeps', 1)
+        per_step_damp = soft.velocity_damping ** (1.0 / substeps)
+        vel_func = _make_velocity_func(per_step_damp, _MAX_SPEED)
+
         for body in soft.nodes:
+            body.velocity_func = vel_func
             space.add(body)
 
         for spring in soft.springs:
@@ -143,20 +187,7 @@ class SoftBodySystem(System):
                         body.position = (transform.x, transform.y)
                 continue
 
-            # --- 1. Velocity damping + hard speed clamp ---
-            damp = soft.velocity_damping
-            max_speed_sq = _MAX_SPEED * _MAX_SPEED
-            for body in soft.nodes:
-                vx = body.velocity.x * damp
-                vy = body.velocity.y * damp
-                speed_sq = vx * vx + vy * vy
-                if speed_sq > max_speed_sq:
-                    s = _MAX_SPEED / math.sqrt(speed_sq)
-                    vx *= s
-                    vy *= s
-                body.velocity = (vx, vy)
-
-            # --- 2. Compute centroid of all nodes ---
+            # --- 1. Compute centroid of all nodes ---
             cx, cy = 0.0, 0.0
             for body in soft.nodes:
                 cx += body.position.x
@@ -174,7 +205,7 @@ class SoftBodySystem(System):
             transform.y = cy
             transform.angle = 0.0
 
-            # --- 3. Rebuild visual vertices ---
+            # --- 2. Rebuild visual vertices ---
             new_verts = []
             for idx in soft.surface_indices:
                 bx = soft.nodes[idx].position.x

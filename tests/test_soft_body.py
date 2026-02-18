@@ -88,11 +88,12 @@ class TestSoftRect:
         # No duplicates
         assert len(set(sb.surface_indices)) == 10
 
-    def test_surface_shapes_on_perimeter_only(self):
+    def test_surface_shapes_on_all_nodes(self):
         e = Sprite.soft_rect(cols=4, rows=4, width=2.0, height=2.0)
         sb = e.get_component(SoftBody)
-        # 4x4: perimeter = 4+3+3+2 = 12 unique nodes
-        assert len(sb.surface_shapes) == 12
+        # Collision shapes on ALL nodes (interior + perimeter) to prevent
+        # floor tunnelling.  4x4 grid = 16 nodes = 16 shapes.
+        assert len(sb.surface_shapes) == 16
 
     def test_visual_is_soft_polygon(self):
         e = Sprite.soft_rect(cols=3, rows=3, width=2.0, height=2.0)
@@ -148,10 +149,11 @@ class TestSoftCircle:
         sb = e.get_component(SoftBody)
         assert len(sb.surface_indices) == 10
 
-    def test_surface_shapes_on_outermost(self):
+    def test_surface_shapes_on_all_nodes(self):
         e = Sprite.soft_circle(rings=2, segments=12, radius=1.5)
         sb = e.get_component(SoftBody)
-        assert len(sb.surface_shapes) == 12
+        # Collision shapes on ALL nodes: 2 rings * 12 segments + 1 center = 25
+        assert len(sb.surface_shapes) == 25
 
     def test_mass_distribution(self):
         density, r = 1.5, 2.0
@@ -512,23 +514,26 @@ class TestPressureForces:
         soft_body_sys.register(sb, e.id)
         physics.space.gravity = (0, 0)
 
-        # Pull two connected nodes far apart
-        sb.nodes[0].position = (-5.0, 0.0)
-        sb.nodes[1].position = (5.0, 0.0)
+        # Pull two connected nodes apart (moderately — extreme stretches
+        # converge slowly due to the per-substep velocity clamp).
+        sb.nodes[0].position = (-2.0, 0.0)
+        sb.nodes[1].position = (2.0, 0.0)
 
         from strata.ecs.world import World
         world = World()
         world.add_entity(e)
 
-        # Let physics step to allow spring forces to pull them back
-        for _ in range(120):
+        # Let physics step to allow spring forces to pull them back.
+        # Per-substep velocity_func damps and clamps speeds, so
+        # convergence takes more iterations than pure springs alone.
+        for _ in range(300):
             physics.space.step(1 / 60)
             soft_body_sys.update(world, 1 / 60)
 
         ax, ay = sb.nodes[0].position
         bx, by = sb.nodes[1].position
         dist = math.sqrt((bx - ax)**2 + (by - ay)**2)
-        assert dist < 5.0, f"Nodes still too far apart: {dist:.2f}"
+        assert dist < 2.5, f"Nodes still too far apart: {dist:.2f}"
 
     def test_no_correction_at_rest(self, physics, soft_body_sys):
         """No position correction when body is at rest configuration."""
@@ -554,7 +559,12 @@ class TestPressureForces:
             assert abs(ay - by) < 0.05
 
     def test_velocity_damping_reduces_speed(self, physics, soft_body_sys):
-        """Velocity damping should reduce node velocities each step."""
+        """Velocity damping should reduce node velocities via velocity_func.
+
+        The velocity_func runs on each space.step(), applying per-substep
+        damping and speed clamping.  We step the space once so the damping
+        takes effect, then verify velocities dropped.
+        """
         e = Sprite.soft_rect(
             cols=2, rows=2, width=1.0, height=1.0, x=0.0, y=0.0,
             velocity_damping=0.9,
@@ -571,11 +581,14 @@ class TestPressureForces:
         world = World()
         world.add_entity(e)
 
+        # Step the space so velocity_func fires (it runs on space.step)
+        physics.space.step(1 / 60)
         soft_body_sys.update(world, 1 / 60)
 
-        # After one update with damping=0.9, velocities should be ~90% of original
+        # After one step, velocity_func applied damping ≈ 0.9.
+        # Spring forces also alter velocity, but the initial 10 m/s should
+        # have been reduced by the 0.9 multiplier.
         for body in sb.nodes:
-            # Spring forces will also alter velocity, but damping should dominate
             assert abs(body.velocity.x) < 10.0
             assert abs(body.velocity.y) < 5.0
 

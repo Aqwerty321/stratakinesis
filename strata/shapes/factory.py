@@ -265,7 +265,7 @@ class Sprite:
         damping: float = 10.0,
         pressure: float = 80.0,
         velocity_damping: float = 0.995,
-        node_radius: float = 0.12,
+        node_radius: float = 0.0,
         node_density: float = 0.0,
         color: tuple[int, ...] = _DEFAULT_POLYGON_COLOR,
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
@@ -288,7 +288,9 @@ class Sprite:
         damping    : DampedSpring damping coefficient.
         pressure   : (legacy, forwarded to SoftBody for compat).
         velocity_damping : per-step velocity multiplier (0..1).
-        node_radius: collision radius of perimeter node circles.
+        node_radius: collision radius of perimeter node circles.  When 0 (default),
+                     auto-calculated from mesh spacing so the perimeter is sealed
+                     (no gaps for external objects to poke through).
         node_density : nodes per world unit.  When > 0, computes cols/rows
                        automatically: ``cols = max(2, round(width * node_density))``.
         """
@@ -309,6 +311,14 @@ class Sprite:
         cell_dy = height / (rows - 1)
         x0 = x - width / 2.0
         y0 = y - height / 2.0
+
+        # Auto-calculate node_radius to seal perimeter gaps if not explicit
+        if node_radius <= 0:
+            # min spacing between adjacent perimeter nodes
+            min_gap = min(cell_dx, cell_dy)
+            # slightly larger than half the gap → overlap (self-collision
+            # is prevented by ShapeFilter.group, so overlap is fine)
+            node_radius = min_gap * 0.55
 
         nodes: list[pymunk.Body] = []
         for r in range(rows):
@@ -382,10 +392,11 @@ class Sprite:
         for r in range(rows - 2, 0, -1):
             surface_indices.append(_idx(r, 0))
 
-        # Collision shapes on perimeter nodes only
+        # Collision shapes on ALL nodes (not just perimeter).
+        # Self-collision is prevented by ShapeFilter.group at registration.
+        # Interior shapes must exist to prevent nodes passing through floors.
         surface_shapes: list[pymunk.Circle] = []
-        perimeter_set = set(surface_indices)
-        for idx in perimeter_set:
+        for idx in range(len(nodes)):
             shape = pymunk.Circle(nodes[idx], node_radius)
             shape.elasticity = 0.3
             shape.friction = 0.8
@@ -437,7 +448,7 @@ class Sprite:
         damping: float = 10.0,
         pressure: float = 80.0,
         velocity_damping: float = 0.995,
-        node_radius: float = 0.10,
+        node_radius: float = 0.0,
         node_density: float = 0.0,
         color: tuple[int, ...] = _DEFAULT_CIRCLE_COLOR,
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
@@ -463,7 +474,8 @@ class Sprite:
         damping  : DampedSpring damping coefficient.
         pressure : (legacy, forwarded to SoftBody for compat).
         velocity_damping : per-step velocity multiplier (0..1).
-        node_radius: collision radius of outermost ring circles.
+        node_radius: collision radius of outermost ring circles.  When 0 (default),
+                     auto-calculated from mesh spacing so the perimeter is sealed.
         node_density : nodes per world unit.  When > 0, computes rings/segments
                        automatically: ``segments = max(6, round(2π * radius * node_density))``,
                        ``rings = max(1, round(radius * node_density))``.
@@ -481,6 +493,11 @@ class Sprite:
         total_mass = density * math.pi * radius * radius
         n_nodes = 1 + rings * segments
         node_mass = total_mass / n_nodes
+
+        # Auto-calculate node_radius to seal perimeter gaps if not explicit
+        if node_radius <= 0:
+            outer_arc = 2.0 * math.pi * radius / segments
+            node_radius = outer_arc * 0.55
 
         # Centre node
         moment_centre = pymunk.moment_for_circle(node_mass, 0, node_radius)
@@ -567,9 +584,11 @@ class Sprite:
         outer_start = ring_start[-1]
         surface_indices = list(range(outer_start, outer_start + segments))
 
-        # Collision shapes on outermost ring only
+        # Collision shapes on ALL nodes (not just outermost ring).
+        # Self-collision is prevented by ShapeFilter.group at registration.
+        # Interior shapes prevent nodes from tunneling through floors.
         surface_shapes: list[pymunk.Circle] = []
-        for idx in surface_indices:
+        for idx in range(len(nodes)):
             shape = pymunk.Circle(nodes[idx], node_radius)
             shape.elasticity = 0.3
             shape.friction = 0.8

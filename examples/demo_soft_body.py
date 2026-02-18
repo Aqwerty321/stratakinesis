@@ -26,6 +26,7 @@ game = Game(
     title="STRATA — Soft Body  (D=debug  SPACE=spawn  R=reset  ESC=quit)",
     gravity=(0.0, -9.81),
     show_overlay=True,
+    physics_substeps=4,
 )
 
 # ---------------------------------------------------------------------------
@@ -58,12 +59,11 @@ def make_soft_rect(x: float = -2.5, y: float = 3.0):
     e = Sprite.soft_rect(
         width=2.0, height=2.0,
         x=x, y=y,
-        density=1.0,
-        stiffness=600.0,
-        damping=25.0,
-        velocity_damping=0.995,
-        node_radius=0.06,
-        node_density=4.0,
+        density=2.0,
+        stiffness=800.0,
+        damping=30.0,
+        velocity_damping=0.993,
+        node_density=3.0,
         color=(255, 140, 80, 200),
         outline=(255, 200, 140, 180),
     )
@@ -75,12 +75,11 @@ def make_soft_circle(x: float = 2.5, y: float = 3.5):
     e = Sprite.soft_circle(
         radius=1.2,
         x=x, y=y,
-        density=1.0,
-        stiffness=600.0,
-        damping=25.0,
-        velocity_damping=0.995,
-        node_radius=0.06,
-        node_density=4.0,
+        density=2.0,
+        stiffness=800.0,
+        damping=30.0,
+        velocity_damping=0.993,
+        node_density=3.0,
         color=(100, 180, 255, 200),
         outline=(180, 220, 255, 180),
     )

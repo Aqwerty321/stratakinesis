@@ -52,9 +52,14 @@ class PhysicsSystem(System):
       7. Sync each entity's Transform from its physics body after the step.
     """
 
-    def __init__(self, gravity: tuple[float, float] = (0.0, -9.81)) -> None:
+    def __init__(
+        self,
+        gravity: tuple[float, float] = (0.0, -9.81),
+        substeps: int = 1,
+    ) -> None:
         self.space: pymunk.Space = pymunk.Space()
         self.space.gravity = gravity
+        self.substeps: int = max(1, substeps)
 
         # shape → entity ID; populated in register()
         self._shape_to_entity: dict[pymunk.Shape, int] = {}
@@ -144,8 +149,17 @@ class PhysicsSystem(System):
     # ------------------------------------------------------------------
 
     def update(self, world: World, dt: float) -> None:
-        """Step physics then sync Transforms.  dt is always FIXED_DT."""
-        self.space.step(dt)
+        """Step physics then sync Transforms.  dt is always FIXED_DT.
+
+        When ``substeps > 1`` the space is stepped ``substeps`` times with
+        ``dt / substeps`` each, giving the DampedSpring solver a smaller
+        effective timestep.  This is essential for soft-body meshes where
+        light nodes + stiff springs would otherwise be numerically unstable.
+        """
+        n = self.substeps
+        sub_dt = dt / n
+        for _ in range(n):
+            self.space.step(sub_dt)
         self._sync_transforms(world)
 
     def _sync_transforms(self, world: World) -> None:

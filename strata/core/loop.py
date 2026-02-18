@@ -119,6 +119,9 @@ class Game:
     vsync       : enable vsync.  Defaults to False on WSLg (where it causes
                   extra compositor latency), True on real displays.
     show_overlay: show FPS/physics HUD at startup. Toggle live with F3.
+    physics_substeps : number of sub-steps per physics tick (default 1).
+                       Soft bodies with stiff springs need >=4 to stay
+                       numerically stable at 60 Hz.
     """
 
     def __init__(
@@ -129,6 +132,7 @@ class Game:
         max_fps: int = _DEFAULT_MAX_FPS,
         vsync: bool = _DEFAULT_VSYNC,
         show_overlay: bool = False,
+        physics_substeps: int = 1,
     ) -> None:
         pygame.init()
 
@@ -159,7 +163,7 @@ class Game:
         self.camera: Camera = Camera(window_size)
 
         # Core systems wired in priority order
-        self.physics: PhysicsSystem = PhysicsSystem(gravity=gravity)
+        self.physics: PhysicsSystem = PhysicsSystem(gravity=gravity, substeps=physics_substeps)
         self.soft_body: SoftBodySystem = SoftBodySystem(physics_system=self.physics)
         self._render: RenderSystem = RenderSystem()
         self._rig: RigSystem = RigSystem(physics_system=self.physics)
