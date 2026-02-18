@@ -35,6 +35,13 @@ class World:
         """Deregister an entity (does not clean up physics bodies — caller's responsibility)."""
         self._entities.remove(entity)
 
+    def get_entity_by_id(self, entity_id: int) -> "Entity | None":
+        """Return the entity with the given id, or None if not found."""
+        for entity in self._entities:
+            if entity.id == entity_id:
+                return entity
+        return None
+
     def get_entities_with(self, *component_types: type) -> list[Entity]:
         """Return all entities that carry every listed component type."""
         result = []

@@ -96,14 +96,17 @@ class Game:
         # Core systems wired in priority order
         self.physics: PhysicsSystem = PhysicsSystem(gravity=gravity)
         self._render: RenderSystem = RenderSystem()
-        self._rig: RigSystem = RigSystem()
+        self._rig: RigSystem = RigSystem(physics_system=self.physics)
 
         # Wire physics system into scene so add_entity/add_entities auto-register
         self.scene._physics_system = self.physics
 
-        self.scene.add_system(self._rig)
+        # System order: Physics first (establishes ground-truth transforms),
+        # then Rig (reads fresh transforms for bindings, updates motor rates for
+        # next step), then Render.
         self.scene.add_system(self.physics)
-        # RenderSystem is called separately via scene.draw(), not scene.update()
+        self.scene.add_system(self._rig)
+        self.scene.add_system(self._render)
 
     # ------------------------------------------------------------------
     # Public single-step method (useful for testing without a window)

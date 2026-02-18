@@ -73,23 +73,50 @@ class Visual(Component):
 class MotorRig(Component):
     """Declarative motor rig: drives a body's angular velocity toward a target.
 
-    RigSystem reads this and applies the motor each fixed step.
-    (Execution stubbed for v0.)
+    RigSystem creates a ``pymunk.SimpleMotor`` between the entity's body and
+    a shared static anchor body, driving angular velocity to ``target_rate``.
+
+    Fields
+    ------
+    target_rate : target angular velocity in radians/second (+ve = CCW).
+    max_force   : pymunk motor maximum force (Nm). Default is effectively unlimited.
+    enabled     : set False to zero the rate without removing the constraint.
+
+    Private (managed by RigSystem — do not set manually)
+    -------
+    _constraint : cached pymunk.SimpleMotor; created on first RigSystem update.
+    _anchor_body: static pymunk.Body that anchors the motor constraint.
     """
-    target_rate: float = 0.0    # target angular velocity (rad/s)
-    max_force: float = 1e8      # pymunk motor max_force
+    target_rate: float = 0.0
+    max_force: float = 1e8
+    enabled: bool = True
+    # --- private cache fields ---
+    _constraint: Any = field(default=None, repr=False, init=False, compare=False)
+    _anchor_body: Any = field(default=None, repr=False, init=False, compare=False)
+
 
 @dataclass
 class PropertyBinding(Component):
-    """Declarative property binding: mirrors an attribute from source → target.
+    """Declarative property binding: mirrors a Transform attribute from one entity to another.
 
-    E.g. bind an entity's angle to a slider value.
-    (Execution stubbed for v0.)
+    RigSystem each step reads ``source_entity.Transform.{source_attr}`` and writes
+    ``entity.Transform.{target_attr} = value * scale + offset``.
+
+    Fields
+    ------
+    source_entity_id : id of the source Entity (set automatically by Sprite helpers).
+    source_attr      : name of the attribute on the source entity's Transform.
+    target_attr      : name of the attribute on this entity's Transform.
+    scale            : multiply the source value before writing.
+    offset           : add to the scaled value before writing.
+    enabled          : set False to pause the binding without removing it.
     """
-    source_attr: str = ""
-    target_attr: str = ""
     source_entity_id: int = -1
+    source_attr: str = "angle"
+    target_attr: str = "angle"
     scale: float = 1.0
+    offset: float = 0.0
+    enabled: bool = True
 
 
 # Convenience alias used by type hints elsewhere
