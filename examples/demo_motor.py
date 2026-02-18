@@ -14,7 +14,7 @@ Run with:
 
 import pygame
 from strata import Game, Sprite
-from strata.ecs.components import MotorRig, PropertyBinding
+from strata.ecs.components import MotorRig, PropertyBinding, Physics
 
 MOTOR_RATE = 8.0  # radians/second
 
@@ -25,8 +25,10 @@ if __name__ == "__main__":
     # Ground
     ground = Sprite.rect(width=20.0, height=0.5, x=0.0, y=-3.5, static=True)
 
-    # Wheel: a dynamic circle with a MotorRig attached
+    # Wheel: a dynamic circle with a MotorRig attached.
+    # High friction so it rolls on the ground instead of sliding.
     wheel = Sprite.circle(radius=0.8, x=-5.0, y=-2.0, density=1.0, physics=True)
+    wheel.get_component(Physics).shape.friction = 2.0
     wheel.add_component(MotorRig(target_rate=MOTOR_RATE, max_force=5e5))
 
     # A secondary disk that mirrors the wheel's angle via PropertyBinding

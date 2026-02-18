@@ -76,6 +76,11 @@ class RenderSystem(System):
         cx, cy = camera.world_to_screen(transform.x, transform.y)
         r = camera.scale_length(visual.radius)
 
+        # Cull entities entirely outside the surface (prevents short overflow)
+        w, h = surface.get_size()
+        if cx + r < 0 or cx - r > w or cy + r < 0 or cy - r > h:
+            return
+
         # Filled circle
         color = visual.color[:3]  # gfxdraw takes RGB or RGBA
         pygame.gfxdraw.filled_circle(surface, cx, cy, r, color)
@@ -107,6 +112,11 @@ class RenderSystem(System):
             screen_pts.append((sx, sy))
 
         if len(screen_pts) < 3:
+            return
+
+        # Cull if all vertices are outside the surface bounds
+        w, h = surface.get_size()
+        if all(sx < 0 or sx > w or sy < 0 or sy > h for sx, sy in screen_pts):
             return
 
         color = visual.color[:4] if len(visual.color) == 4 else (*visual.color, 255)
