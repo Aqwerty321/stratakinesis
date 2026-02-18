@@ -263,6 +263,8 @@ class Sprite:
         density: float = 1.0,
         stiffness: float = 300.0,
         damping: float = 10.0,
+        pressure: float = 80.0,
+        velocity_damping: float = 0.995,
         node_radius: float = 0.12,
         color: tuple[int, ...] = _DEFAULT_POLYGON_COLOR,
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
@@ -277,6 +279,8 @@ class Sprite:
         density    : total mass = density * width * height, distributed evenly.
         stiffness  : DampedSpring stiffness (N per world unit).
         damping    : DampedSpring damping coefficient.
+        pressure   : internal pressure coefficient — resists volume loss.
+        velocity_damping : per-step velocity multiplier (0..1).
         node_radius: collision radius of perimeter node circles.
         """
         if cols < 2 or rows < 2:
@@ -356,6 +360,9 @@ class Sprite:
             bx, by = nodes[idx].position
             perimeter_verts.append((bx - x, by - y))
 
+        # Compute rest area from perimeter polygon (for pressure forces)
+        rest_area = _shoelace_area(perimeter_verts)
+
         entity = Entity()
         entity.add_component(Transform(x=x, y=y))
         entity.add_component(Visual(
@@ -372,6 +379,9 @@ class Sprite:
             stiffness=stiffness,
             damping=damping,
             node_radius=node_radius,
+            pressure=pressure,
+            velocity_damping=velocity_damping,
+            rest_area=rest_area,
             topology="grid",
         ))
 
@@ -387,6 +397,8 @@ class Sprite:
         density: float = 1.0,
         stiffness: float = 300.0,
         damping: float = 10.0,
+        pressure: float = 80.0,
+        velocity_damping: float = 0.995,
         node_radius: float = 0.10,
         color: tuple[int, ...] = _DEFAULT_CIRCLE_COLOR,
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
@@ -402,6 +414,8 @@ class Sprite:
         density  : total mass = density * pi * radius^2.
         stiffness: DampedSpring stiffness.
         damping  : DampedSpring damping coefficient.
+        pressure : internal pressure coefficient — resists volume loss.
+        velocity_damping : per-step velocity multiplier (0..1).
         node_radius: collision radius of outermost ring circles.
         """
         if rings < 1:
@@ -480,6 +494,9 @@ class Sprite:
             bx, by = nodes[idx].position
             perimeter_verts.append((bx - x, by - y))
 
+        # Compute rest area from perimeter polygon (for pressure forces)
+        rest_area = _shoelace_area(perimeter_verts)
+
         entity = Entity()
         entity.add_component(Transform(x=x, y=y))
         entity.add_component(Visual(
@@ -496,6 +513,9 @@ class Sprite:
             stiffness=stiffness,
             damping=damping,
             node_radius=node_radius,
+            pressure=pressure,
+            velocity_damping=velocity_damping,
+            rest_area=rest_area,
             topology="radial",
         ))
 

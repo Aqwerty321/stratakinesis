@@ -2,8 +2,16 @@
 # Manages spring-mass soft bodies: adds nodes/springs/shapes to the pymunk
 # Space, syncs node positions → Visual.vertices + Transform centroid each step,
 # and provides clean teardown on entity removal.
+#
+# Anti-inversion measures:
+#   1. Internal pressure forces — compute signed surface area via shoelace,
+#      push surface nodes outward along edge normals when area shrinks below
+#      rest_area.  This prevents mesh collapse/inversion on impact.
+#   2. Per-node velocity damping — multiplies velocity by a factor < 1 each
+#      step to prevent runaway energy buildup.
 
 from __future__ import annotations
+import math
 from typing import TYPE_CHECKING
 
 import pymunk
@@ -14,6 +22,17 @@ from strata.ecs.world import World
 
 if TYPE_CHECKING:
     from strata.systems.physics_system import PhysicsSystem
+
+
+def _signed_area(positions: list[tuple[float, float]]) -> float:
+    """Signed area of a polygon (positive = CCW, negative = CW/inverted)."""
+    n = len(positions)
+    total = 0.0
+    for i in range(n):
+        x1, y1 = positions[i]
+        x2, y2 = positions[(i + 1) % n]
+        total += x1 * y2 - x2 * y1
+    return total / 2.0
 
 
 class SoftBodySystem(System):
@@ -91,7 +110,7 @@ class SoftBodySystem(System):
     # ------------------------------------------------------------------
 
     def update(self, world: World, dt: float) -> None:
-        """Sync soft body node positions → Transform centroid + Visual vertices."""
+        """Apply pressure forces, velocity damping, then sync visuals."""
         for entity in world.get_entities_with(SoftBody, Transform, Visual):
             soft: SoftBody = entity.get_component(SoftBody)
             transform: Transform = entity.get_component(Transform)
@@ -100,7 +119,19 @@ class SoftBodySystem(System):
             if not soft.nodes:
                 continue
 
-            # Compute centroid of all nodes
+            # --- 1. Internal pressure forces (anti-inversion) ---
+            if soft.pressure > 0.0 and soft.rest_area > 0.0 and len(soft.surface_indices) >= 3:
+                self._apply_pressure(soft, dt)
+
+            # --- 2. Velocity damping ---
+            if soft.velocity_damping < 1.0:
+                for body in soft.nodes:
+                    body.velocity = (
+                        body.velocity.x * soft.velocity_damping,
+                        body.velocity.y * soft.velocity_damping,
+                    )
+
+            # --- 3. Compute centroid of all nodes ---
             cx, cy = 0.0, 0.0
             for body in soft.nodes:
                 cx += body.position.x
@@ -116,15 +147,74 @@ class SoftBodySystem(System):
 
             transform.x = cx
             transform.y = cy
-            # Soft bodies don't have a meaningful single rotation
             transform.angle = 0.0
 
-            # Rebuild visual vertices from surface node positions (world-space
-            # relative to centroid — the render system will use them directly
-            # without applying rotation).
+            # --- 4. Rebuild visual vertices ---
             new_verts = []
             for idx in soft.surface_indices:
                 bx = soft.nodes[idx].position.x
                 by = soft.nodes[idx].position.y
                 new_verts.append((bx - cx, by - cy))
             visual.vertices = new_verts
+
+    # ------------------------------------------------------------------
+    # Pressure force (volume preservation)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _apply_pressure(soft: SoftBody, dt: float) -> None:
+        """Push surface nodes outward when the mesh area drops below rest_area.
+
+        For each edge of the surface polygon, compute its outward normal and
+        apply a force proportional to ``pressure * (1 - current_area / rest_area)``
+        distributed along the edge's two endpoint nodes.
+
+        This acts like internal gas pressure: when the body compresses, it
+        pushes back.  When at or above rest area, no force is applied.
+        """
+        indices = soft.surface_indices
+        n = len(indices)
+        nodes = soft.nodes
+
+        # Current surface node positions
+        positions = [(nodes[idx].position.x, nodes[idx].position.y) for idx in indices]
+
+        current_area = _signed_area(positions)
+
+        # If area is inverted (CW winding), use a stronger correction
+        if current_area < 0:
+            # Area is inverted — very strong correction
+            ratio = 2.0
+        else:
+            ratio = 1.0 - current_area / soft.rest_area
+            if ratio <= 0.0:
+                return  # at or above rest area, no pressure needed
+
+        # Clamp ratio to prevent explosive forces
+        ratio = min(ratio, 3.0)
+        force_magnitude = soft.pressure * ratio
+
+        # Apply force along each edge's outward normal, split between endpoints
+        for i in range(n):
+            j = (i + 1) % n
+            ax, ay = positions[i]
+            bx, by = positions[j]
+
+            # Edge vector
+            ex, ey = bx - ax, by - ay
+            edge_len = math.sqrt(ex * ex + ey * ey)
+            if edge_len < 1e-8:
+                continue
+
+            # Outward normal (for CCW polygon: perpendicular pointing outward)
+            nx, ny = -ey / edge_len, ex / edge_len
+
+            # Force proportional to edge length (pressure * area-deficit * edge)
+            fx = nx * force_magnitude * edge_len * 0.5
+            fy = ny * force_magnitude * edge_len * 0.5
+
+            # Apply to both endpoints of this edge
+            body_i = nodes[indices[i]]
+            body_j = nodes[indices[j]]
+            body_i.apply_force_at_local_point((fx, fy), (0, 0))
+            body_j.apply_force_at_local_point((fx, fy), (0, 0))

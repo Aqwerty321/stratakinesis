@@ -19,7 +19,7 @@ from strata import Game, Sprite, SoftBody
 from strata.ecs.components import Transform, Visual, Physics
 from strata.ecs.entity import Entity
 from strata.shapes.factory import _shoelace_area
-from strata.systems.soft_body_system import SoftBodySystem
+from strata.systems.soft_body_system import SoftBodySystem, _signed_area
 from strata.systems.physics_system import PhysicsSystem
 
 
@@ -432,3 +432,209 @@ class TestGameIntegration:
 
         # Step should not crash with debug_render on
         game.step()
+
+
+# ===========================================================================
+# Pressure & velocity damping (anti-inversion)
+# ===========================================================================
+
+class TestPressureFields:
+    """New SoftBody fields: pressure, velocity_damping, rest_area."""
+
+    def test_defaults(self):
+        e = Sprite.soft_rect(cols=2, rows=2, width=1.0, height=1.0)
+        sb = e.get_component(SoftBody)
+        assert sb.pressure == 80.0
+        assert sb.velocity_damping == 0.995
+        assert sb.rest_area > 0.0
+
+    def test_custom_values(self):
+        e = Sprite.soft_rect(
+            cols=2, rows=2, width=1.0, height=1.0,
+            pressure=120.0, velocity_damping=0.98,
+        )
+        sb = e.get_component(SoftBody)
+        assert sb.pressure == 120.0
+        assert sb.velocity_damping == 0.98
+
+    def test_rest_area_matches_shoelace(self):
+        """rest_area should equal the shoelace area of the initial perimeter."""
+        e = Sprite.soft_rect(cols=3, rows=3, width=2.0, height=2.0)
+        sb = e.get_component(SoftBody)
+        # For a 2x2 square, the area should be approximately 4.0
+        assert abs(sb.rest_area - 4.0) < 0.1
+
+    def test_soft_circle_rest_area(self):
+        e = Sprite.soft_circle(rings=2, segments=16, radius=1.0)
+        sb = e.get_component(SoftBody)
+        # Polygon inscribed in r=1 circle: area ≈ π (closer with more segments)
+        assert sb.rest_area > 2.5
+        assert sb.rest_area < math.pi + 0.1
+
+    def test_pressure_param_circle(self):
+        e = Sprite.soft_circle(
+            rings=2, segments=8, radius=1.0,
+            pressure=50.0, velocity_damping=0.99,
+        )
+        sb = e.get_component(SoftBody)
+        assert sb.pressure == 50.0
+        assert sb.velocity_damping == 0.99
+
+
+class TestSignedArea:
+    """Unit tests for _signed_area helper."""
+
+    def test_ccw_square_positive(self):
+        # CCW unit square
+        verts = [(0, 0), (1, 0), (1, 1), (0, 1)]
+        assert abs(_signed_area(verts) - 1.0) < 1e-6
+
+    def test_cw_square_negative(self):
+        # CW unit square
+        verts = [(0, 0), (0, 1), (1, 1), (1, 0)]
+        assert abs(_signed_area(verts) - (-1.0)) < 1e-6
+
+    def test_triangle(self):
+        verts = [(0, 0), (2, 0), (1, 1)]
+        assert abs(_signed_area(verts) - 1.0) < 1e-6
+
+
+class TestPressureForces:
+    """Integration tests for internal pressure force behaviour."""
+
+    def test_compressed_body_expands(self, physics, soft_body_sys):
+        """When nodes are pushed inward, pressure should push them back out."""
+        e = Sprite.soft_circle(
+            rings=2, segments=8, radius=1.0, x=0.0, y=0.0,
+            pressure=200.0, velocity_damping=0.99,
+        )
+        sb = e.get_component(SoftBody)
+        soft_body_sys.register(sb, e.id)
+
+        # Compress all outer nodes inward by 30%
+        for idx in sb.surface_indices:
+            bx, by = sb.nodes[idx].position
+            sb.nodes[idx].position = (bx * 0.7, by * 0.7)
+
+        from strata.ecs.world import World
+        world = World()
+        world.add_entity(e)
+
+        # Record compressed positions
+        compressed_dists = []
+        for idx in sb.surface_indices:
+            bx, by = sb.nodes[idx].position
+            compressed_dists.append(math.sqrt(bx**2 + by**2))
+
+        # Step several times — pressure should push nodes outward
+        for _ in range(30):
+            physics.space.step(1 / 60)
+            soft_body_sys.update(world, 1 / 60)
+
+        # Measure distances from centre
+        expanded_dists = []
+        cx, cy = 0.0, 0.0
+        for body in sb.nodes:
+            cx += body.position.x
+            cy += body.position.y
+        cx /= len(sb.nodes)
+        cy /= len(sb.nodes)
+
+        for idx in sb.surface_indices:
+            bx, by = sb.nodes[idx].position
+            expanded_dists.append(math.sqrt((bx - cx)**2 + (by - cy)**2))
+
+        # Average distance should increase (nodes pushed outward)
+        avg_compressed = sum(compressed_dists) / len(compressed_dists)
+        avg_expanded = sum(expanded_dists) / len(expanded_dists)
+        assert avg_expanded > avg_compressed, \
+            f"Pressure should expand compressed body: {avg_expanded:.3f} <= {avg_compressed:.3f}"
+
+    def test_no_pressure_when_at_rest_area(self, physics, soft_body_sys):
+        """No pressure forces when body is at or above rest area."""
+        e = Sprite.soft_rect(
+            cols=2, rows=2, width=1.0, height=1.0, x=0.0, y=0.0,
+            pressure=100.0,
+        )
+        sb = e.get_component(SoftBody)
+        soft_body_sys.register(sb, e.id)
+
+        # Zero gravity, body at rest — no compression
+        physics.space.gravity = (0, 0)
+        for body in sb.nodes:
+            body.velocity = (0, 0)
+
+        from strata.ecs.world import World
+        world = World()
+        world.add_entity(e)
+
+        positions_before = [(b.position.x, b.position.y) for b in sb.nodes]
+        soft_body_sys.update(world, 1 / 60)
+        physics.space.step(1 / 60)
+        positions_after = [(b.position.x, b.position.y) for b in sb.nodes]
+
+        # Nodes should barely move (only spring forces, which are at rest length)
+        for (bx, by), (ax, ay) in zip(positions_before, positions_after):
+            assert abs(ax - bx) < 0.05
+            assert abs(ay - by) < 0.05
+
+    def test_velocity_damping_reduces_speed(self, physics, soft_body_sys):
+        """Velocity damping should reduce node velocities each step."""
+        e = Sprite.soft_rect(
+            cols=2, rows=2, width=1.0, height=1.0, x=0.0, y=0.0,
+            velocity_damping=0.9,
+        )
+        sb = e.get_component(SoftBody)
+        soft_body_sys.register(sb, e.id)
+        physics.space.gravity = (0, 0)
+
+        # Give all nodes a velocity
+        for body in sb.nodes:
+            body.velocity = (10.0, 5.0)
+
+        from strata.ecs.world import World
+        world = World()
+        world.add_entity(e)
+
+        soft_body_sys.update(world, 1 / 60)
+
+        # After one update with damping=0.9, velocities should be ~90% of original
+        for body in sb.nodes:
+            # Spring forces will also alter velocity, but damping should dominate
+            assert abs(body.velocity.x) < 10.0
+            assert abs(body.velocity.y) < 5.0
+
+    def test_mesh_survives_impact(self, physics, soft_body_sys):
+        """A soft circle dropped from height should not invert its mesh."""
+        # Floor
+        floor_body = pymunk.Body(body_type=pymunk.Body.STATIC)
+        floor_body.position = (0, 0)
+        floor_shape = pymunk.Segment(floor_body, (-10, 0), (10, 0), 0.1)
+        floor_shape.elasticity = 0.2
+        floor_shape.friction = 0.8
+        physics.space.add(floor_body, floor_shape)
+
+        e = Sprite.soft_circle(
+            rings=2, segments=10, radius=0.8, x=0.0, y=5.0,
+            stiffness=300.0, damping=12.0,
+            pressure=120.0, velocity_damping=0.99,
+        )
+        sb = e.get_component(SoftBody)
+        soft_body_sys.register(sb, e.id)
+
+        from strata.ecs.world import World
+        world = World()
+        world.add_entity(e)
+
+        # Drop for 300 steps (~5 seconds)
+        for _ in range(300):
+            physics.space.step(1 / 60)
+            soft_body_sys.update(world, 1 / 60)
+
+        # Surface area should still be positive (not inverted)
+        positions = [
+            (sb.nodes[idx].position.x, sb.nodes[idx].position.y)
+            for idx in sb.surface_indices
+        ]
+        area = _signed_area(positions)
+        assert area > 0, f"Mesh inverted after impact: signed area = {area:.3f}"
