@@ -43,6 +43,10 @@ class SoftBodySystem(System):
 
         Also maps surface shapes → entity_id in the physics system's
         shape-to-entity lookup (for collision events).
+
+        Self-clipping protection: all surface shapes of the same soft body
+        share a non-zero ``ShapeFilter.group``, so pymunk never generates
+        contacts between nodes of the same mesh.
         """
         space = self._physics.space
 
@@ -52,7 +56,11 @@ class SoftBodySystem(System):
         for spring in soft.springs:
             space.add(spring)
 
+        # Use entity_id as the ShapeFilter group.  Shapes with matching
+        # non-zero group never collide, preventing self-clipping.
+        group = entity_id if entity_id > 0 else 0
         for shape in soft.surface_shapes:
+            shape.filter = pymunk.ShapeFilter(group=group)
             space.add(shape)
             if entity_id >= 0:
                 self._physics._shape_to_entity[shape] = entity_id

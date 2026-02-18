@@ -245,6 +245,33 @@ class TestSoftBodySystem:
         for shape in sb.surface_shapes:
             assert shape not in physics._shape_to_entity
 
+    def test_self_clipping_protection(self, physics, soft_body_sys):
+        """Surface shapes of the same soft body share a ShapeFilter group,
+        preventing self-collision between nodes of the same mesh."""
+        e = Sprite.soft_rect(cols=3, rows=3, width=2.0, height=2.0)
+        sb = e.get_component(SoftBody)
+        soft_body_sys.register(sb, e.id)
+
+        # All surface shapes must have the same non-zero group
+        groups = {shape.filter.group for shape in sb.surface_shapes}
+        assert len(groups) == 1, f"Expected one group, got {groups}"
+        group = groups.pop()
+        assert group != 0, "ShapeFilter.group must be non-zero for self-clip protection"
+        assert group == e.id
+
+    def test_different_bodies_can_still_collide(self, physics, soft_body_sys):
+        """Two different soft bodies should NOT share a group (can collide)."""
+        e1 = Sprite.soft_rect(cols=2, rows=2, width=1.0, height=1.0, x=-2.0, y=0.0)
+        e2 = Sprite.soft_rect(cols=2, rows=2, width=1.0, height=1.0, x=2.0, y=0.0)
+        sb1 = e1.get_component(SoftBody)
+        sb2 = e2.get_component(SoftBody)
+        soft_body_sys.register(sb1, e1.id)
+        soft_body_sys.register(sb2, e2.id)
+
+        groups1 = {s.filter.group for s in sb1.surface_shapes}
+        groups2 = {s.filter.group for s in sb2.surface_shapes}
+        assert groups1 != groups2, "Different soft bodies must have different groups"
+
 
 # ===========================================================================
 # SoftBodySystem — update (sync Transform + Visual)
