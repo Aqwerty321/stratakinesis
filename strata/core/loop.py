@@ -150,8 +150,9 @@ class Game:
                 self.scene.update(FIXED_DT)
                 accumulator -= FIXED_DT
 
-            # --- Render ---
-            self.scene.draw(self._surface, self.camera)
+            # --- Render (pass alpha for sub-step interpolation) ---
+            alpha = accumulator / FIXED_DT
+            self.scene.draw(self._surface, self.camera, alpha)
             pygame.display.flip()
 
         pygame.quit()

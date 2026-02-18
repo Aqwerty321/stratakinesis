@@ -71,8 +71,8 @@ class World:
         for system in self._systems:
             system.update(self, dt)
 
-    def draw(self, surface, camera) -> None:  # type: ignore[type-arg]
-        """Call draw() on every system that supports it."""
+    def draw(self, surface, camera, alpha: float = 1.0) -> None:  # type: ignore[type-arg]
+        """Call draw() on every system that supports it, passing interpolation alpha."""
         for system in self._systems:
             if hasattr(system, "draw"):
-                system.draw(self, surface, camera)
+                system.draw(self, surface, camera, alpha)

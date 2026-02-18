@@ -107,7 +107,8 @@ if __name__ == "__main__":
             game.scene.update(FIXED_DT)
             accumulator -= FIXED_DT
 
-        game.scene.draw(game._surface, game.camera)
+        alpha = accumulator / FIXED_DT
+        game.scene.draw(game._surface, game.camera, alpha)
 
         # HUD overlay
         hud = font.render(

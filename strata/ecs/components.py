@@ -20,10 +20,25 @@ class Component:
 
 @dataclass
 class Transform(Component):
-    """World-space position and rotation."""
+    """World-space position and rotation.
+
+    ``prev_*`` fields hold the state at the start of the last physics step.
+    RenderSystem lerps between prev and current using the accumulator alpha
+    to produce smooth visuals at any frame rate.
+    """
     x: float = 0.0
     y: float = 0.0
     angle: float = 0.0  # radians, counter-clockwise positive
+    # --- interpolation snapshots (written by PhysicsSystem before each sync) ---
+    prev_x: float = field(default=0.0, repr=False)
+    prev_y: float = field(default=0.0, repr=False)
+    prev_angle: float = field(default=0.0, repr=False)
+
+    def __post_init__(self) -> None:
+        # Initialise prev to the same values so first frame has no lerp jump
+        self.prev_x = self.x
+        self.prev_y = self.y
+        self.prev_angle = self.angle
 
 
 # ---------------------------------------------------------------------------

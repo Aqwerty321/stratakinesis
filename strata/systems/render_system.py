@@ -30,8 +30,15 @@ class RenderSystem(System):
         # RenderSystem has nothing to do during physics steps.
         pass
 
-    def draw(self, world: World, surface: pygame.Surface, camera: Camera) -> None:
-        """Clear screen then draw all visual entities."""
+    def draw(self, world: World, surface: pygame.Surface, camera: Camera, alpha: float = 1.0) -> None:
+        """Clear screen then draw all visual entities.
+
+        Parameters
+        ----------
+        alpha : interpolation factor in [0, 1].  0 = previous physics state,
+                1 = current physics state.  Pass ``accumulator / FIXED_DT``
+                from the game loop for smooth sub-step rendering.
+        """
         # Fill entire window (letterbox colour)
         surface.fill(_BG_COLOUR)
 
@@ -48,7 +55,7 @@ class RenderSystem(System):
         for entity in world.get_entities_with(Visual, Transform):
             visual: Visual = entity.get_component(Visual)
             transform: Transform = entity.get_component(Transform)
-            self._draw_entity(surface, camera, visual, transform)
+            self._draw_entity(surface, camera, visual, transform, alpha)
 
     # ------------------------------------------------------------------
     # Internal drawing helpers
@@ -60,20 +67,28 @@ class RenderSystem(System):
         camera: Camera,
         visual: Visual,
         transform: Transform,
+        alpha: float = 1.0,
     ) -> None:
+        # Build an interpolated transform for rendering — never mutates the real one
+        rx = transform.prev_x + alpha * (transform.x - transform.prev_x)
+        ry = transform.prev_y + alpha * (transform.y - transform.prev_y)
+        # Angle lerp (simple linear; fine for small-step sizes)
+        ra = transform.prev_angle + alpha * (transform.angle - transform.prev_angle)
         if visual.shape_type == "circle":
-            self._draw_circle(surface, camera, visual, transform)
+            self._draw_circle(surface, camera, visual, rx, ry, ra)
         else:
-            self._draw_polygon(surface, camera, visual, transform)
+            self._draw_polygon(surface, camera, visual, rx, ry, ra)
 
     def _draw_circle(
         self,
         surface: pygame.Surface,
         camera: Camera,
         visual: Visual,
-        transform: Transform,
+        rx: float,
+        ry: float,
+        ra: float,
     ) -> None:
-        cx, cy = camera.world_to_screen(transform.x, transform.y)
+        cx, cy = camera.world_to_screen(rx, ry)
         r = camera.scale_length(visual.radius)
 
         # Cull entities entirely outside the surface (prevents short overflow)
@@ -93,22 +108,24 @@ class RenderSystem(System):
         surface: pygame.Surface,
         camera: Camera,
         visual: Visual,
-        transform: Transform,
+        rx: float,
+        ry: float,
+        ra: float,
     ) -> None:
         if not visual.vertices:
             return
 
-        cos_a = math.cos(transform.angle)
-        sin_a = math.sin(transform.angle)
+        cos_a = math.cos(ra)
+        sin_a = math.sin(ra)
 
         # Transform cached local vertices → screen pixels
         screen_pts: list[tuple[int, int]] = []
         for lx, ly in visual.vertices:
             # Rotate around local origin
-            rx = lx * cos_a - ly * sin_a
-            ry = lx * sin_a + ly * cos_a
+            rot_x = lx * cos_a - ly * sin_a
+            rot_y = lx * sin_a + ly * cos_a
             # Translate to world position then convert to screen
-            sx, sy = camera.world_to_screen(transform.x + rx, transform.y + ry)
+            sx, sy = camera.world_to_screen(rx + rot_x, ry + rot_y)
             screen_pts.append((sx, sy))
 
         if len(screen_pts) < 3:

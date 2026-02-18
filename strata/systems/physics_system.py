@@ -58,6 +58,12 @@ class PhysicsSystem(System):
                 continue
 
             body: pymunk.Body = physics.body
+
+            # Snapshot current state before overwriting (used for interpolation)
+            transform.prev_x = transform.x
+            transform.prev_y = transform.y
+            transform.prev_angle = transform.angle
+
             transform.x = body.position.x
             transform.y = body.position.y
             transform.angle = body.angle
