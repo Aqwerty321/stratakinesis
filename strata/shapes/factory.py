@@ -266,23 +266,37 @@ class Sprite:
         pressure: float = 80.0,
         velocity_damping: float = 0.995,
         node_radius: float = 0.12,
+        node_density: float = 0.0,
         color: tuple[int, ...] = _DEFAULT_POLYGON_COLOR,
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
     ) -> Entity:
         """Create a soft rectangular body using a grid spring-mass mesh.
 
+        The mesh has three spring tiers:
+          * **structural** — horizontal + vertical (maintain overall shape).
+          * **shear** — diagonal (resist shearing).
+          * **bending** — 2-away horizontal + vertical (resist folding).
+
         Parameters
         ----------
         cols, rows : grid subdivisions (minimum 2x2).
+                     Overridden by *node_density* when > 0.
         width, height : overall dimensions in world units.
         x, y       : world-space centre of the soft body.
         density    : total mass = density * width * height, distributed evenly.
         stiffness  : DampedSpring stiffness (N per world unit).
         damping    : DampedSpring damping coefficient.
-        pressure   : internal pressure coefficient — resists volume loss.
+        pressure   : (legacy, forwarded to SoftBody for compat).
         velocity_damping : per-step velocity multiplier (0..1).
         node_radius: collision radius of perimeter node circles.
+        node_density : nodes per world unit.  When > 0, computes cols/rows
+                       automatically: ``cols = max(2, round(width * node_density))``.
         """
+        # node_density override
+        if node_density > 0:
+            cols = max(2, round(width * node_density))
+            rows = max(2, round(height * node_density))
+
         if cols < 2 or rows < 2:
             raise ValueError(f"soft_rect requires cols>=2, rows>=2; got {cols}x{rows}")
 
@@ -307,32 +321,55 @@ class Sprite:
         def _idx(r: int, c: int) -> int:
             return r * cols + c
 
-        # Springs: horizontal, vertical, diagonal (structural + shear)
+        # Springs: structural, shear, and bending
         springs: list[pymunk.DampedSpring] = []
+        _added: set[tuple[int, int]] = set()  # avoid duplicate springs
 
-        def _add_spring(i: int, j: int) -> None:
+        def _add_spring(i: int, j: int, stiff: float, damp: float) -> None:
+            key = (min(i, j), max(i, j))
+            if key in _added:
+                return
+            _added.add(key)
             a, b = nodes[i], nodes[j]
             rest = a.position.get_distance(b.position)
             spring = pymunk.DampedSpring(
-                a, b, (0, 0), (0, 0), rest, stiffness, damping
+                a, b, (0, 0), (0, 0), rest, stiff, damp
             )
             spring.collide_bodies = False
             springs.append(spring)
 
+        # Bending spring parameters — softer than structural
+        bend_stiffness = stiffness * 0.4
+        bend_damping = damping * 0.4
+
         for r in range(rows):
             for c in range(cols):
-                # Right neighbour
+                # --- Structural: immediate neighbours ---
+                # Right
                 if c + 1 < cols:
-                    _add_spring(_idx(r, c), _idx(r, c + 1))
-                # Up neighbour
+                    _add_spring(_idx(r, c), _idx(r, c + 1), stiffness, damping)
+                # Up
                 if r + 1 < rows:
-                    _add_spring(_idx(r, c), _idx(r + 1, c))
-                # Diagonal up-right
+                    _add_spring(_idx(r, c), _idx(r + 1, c), stiffness, damping)
+
+                # --- Shear: diagonal neighbours ---
                 if r + 1 < rows and c + 1 < cols:
-                    _add_spring(_idx(r, c), _idx(r + 1, c + 1))
-                # Diagonal up-left
+                    _add_spring(_idx(r, c), _idx(r + 1, c + 1), stiffness, damping)
                 if r + 1 < rows and c - 1 >= 0:
-                    _add_spring(_idx(r, c), _idx(r + 1, c - 1))
+                    _add_spring(_idx(r, c), _idx(r + 1, c - 1), stiffness, damping)
+
+                # --- Bending: 2-away neighbours ---
+                # Horizontal bending
+                if c + 2 < cols:
+                    _add_spring(_idx(r, c), _idx(r, c + 2), bend_stiffness, bend_damping)
+                # Vertical bending
+                if r + 2 < rows:
+                    _add_spring(_idx(r, c), _idx(r + 2, c), bend_stiffness, bend_damping)
+                # Diagonal bending
+                if r + 2 < rows and c + 2 < cols:
+                    _add_spring(_idx(r, c), _idx(r + 2, c + 2), bend_stiffness, bend_damping)
+                if r + 2 < rows and c - 2 >= 0:
+                    _add_spring(_idx(r, c), _idx(r + 2, c - 2), bend_stiffness, bend_damping)
 
         # Perimeter indices (CCW): bottom L->R, right B->T, top R->L, left T->B
         surface_indices: list[int] = []
@@ -379,6 +416,7 @@ class Sprite:
             stiffness=stiffness,
             damping=damping,
             node_radius=node_radius,
+            node_density=node_density,
             pressure=pressure,
             velocity_damping=velocity_damping,
             rest_area=rest_area,
@@ -400,24 +438,41 @@ class Sprite:
         pressure: float = 80.0,
         velocity_damping: float = 0.995,
         node_radius: float = 0.10,
+        node_density: float = 0.0,
         color: tuple[int, ...] = _DEFAULT_CIRCLE_COLOR,
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
     ) -> Entity:
         """Create a soft circular body using a radial ring spring-mass mesh.
 
+        The mesh has three spring tiers:
+          * **structural** — radial + circumferential (maintain overall shape).
+          * **shear** — cross-ring diagonal (resist shearing).
+          * **bending** — 2-away circumferential + skip-ring radial (resist
+            folding / angular collapse).
+
         Parameters
         ----------
         rings    : number of concentric rings (minimum 1). ring 0 = centre node.
+                   Overridden by *node_density* when > 0.
         segments : nodes per ring (minimum 3).
+                   Overridden by *node_density* when > 0.
         radius   : outer radius in world units.
         x, y     : world-space centre of the soft body.
         density  : total mass = density * pi * radius^2.
         stiffness: DampedSpring stiffness.
         damping  : DampedSpring damping coefficient.
-        pressure : internal pressure coefficient — resists volume loss.
+        pressure : (legacy, forwarded to SoftBody for compat).
         velocity_damping : per-step velocity multiplier (0..1).
         node_radius: collision radius of outermost ring circles.
+        node_density : nodes per world unit.  When > 0, computes rings/segments
+                       automatically: ``segments = max(6, round(2π * radius * node_density))``,
+                       ``rings = max(1, round(radius * node_density))``.
         """
+        # node_density override
+        if node_density > 0:
+            segments = max(6, round(2 * math.pi * radius * node_density))
+            rings = max(1, round(radius * node_density))
+
         if rings < 1:
             raise ValueError(f"soft_circle requires rings>=1, got {rings}")
         if segments < 3:
@@ -448,33 +503,65 @@ class Sprite:
                 nodes.append(body)
 
         springs: list[pymunk.DampedSpring] = []
+        _added: set[tuple[int, int]] = set()  # avoid duplicate springs
 
-        def _add_spring(i: int, j: int) -> None:
+        def _add_spring(i: int, j: int, stiff: float, damp: float) -> None:
+            key = (min(i, j), max(i, j))
+            if key in _added:
+                return
+            _added.add(key)
             a, b = nodes[i], nodes[j]
             rest = a.position.get_distance(b.position)
             spring = pymunk.DampedSpring(
-                a, b, (0, 0), (0, 0), rest, stiffness, damping
+                a, b, (0, 0), (0, 0), rest, stiff, damp
             )
             spring.collide_bodies = False
             springs.append(spring)
 
-        # Radial springs: centre -> ring 1
-        for seg in range(segments):
-            _add_spring(0, ring_start[0] + seg)
+        # Bending spring parameters — softer than structural
+        bend_stiffness = stiffness * 0.4
+        bend_damping = damping * 0.4
 
-        # Per-ring: circumferential + radial to previous ring
+        # --- Structural: centre -> ring 1 ---
+        for seg in range(segments):
+            _add_spring(0, ring_start[0] + seg, stiffness, damping)
+
+        # --- Per-ring: circumferential + radial/shear to previous ring ---
         for ring_i in range(len(ring_start)):
             start = ring_start[ring_i]
-            # Circumferential: connect each node to next in ring
+            # Circumferential (structural)
             for seg in range(segments):
-                _add_spring(start + seg, start + (seg + 1) % segments)
-            # Radial to previous ring
+                _add_spring(start + seg, start + (seg + 1) % segments,
+                            stiffness, damping)
+            # Radial + shear to previous ring
             if ring_i > 0:
                 prev_start = ring_start[ring_i - 1]
                 for seg in range(segments):
-                    _add_spring(prev_start + seg, start + seg)
-                    # Diagonal shear
-                    _add_spring(prev_start + (seg + 1) % segments, start + seg)
+                    # Radial (structural)
+                    _add_spring(prev_start + seg, start + seg,
+                                stiffness, damping)
+                    # Shear diagonal
+                    _add_spring(prev_start + (seg + 1) % segments, start + seg,
+                                stiffness, damping)
+
+        # --- Bending: 2-away circumferential ---
+        for ring_i in range(len(ring_start)):
+            start = ring_start[ring_i]
+            for seg in range(segments):
+                _add_spring(start + seg, start + (seg + 2) % segments,
+                            bend_stiffness, bend_damping)
+
+        # --- Bending: skip-ring radial (connect ring i to ring i+2) ---
+        for ring_i in range(len(ring_start)):
+            start = ring_start[ring_i]
+            # Connect to centre if this is ring 1 (ring_i == 0)
+            # (already connected via structural radial — skip)
+            # Connect to ring two further out
+            if ring_i + 2 < len(ring_start):
+                far_start = ring_start[ring_i + 2]
+                for seg in range(segments):
+                    _add_spring(start + seg, far_start + seg,
+                                bend_stiffness, bend_damping)
 
         # Surface = outermost ring
         outer_start = ring_start[-1]
@@ -513,6 +600,7 @@ class Sprite:
             stiffness=stiffness,
             damping=damping,
             node_radius=node_radius,
+            node_density=node_density,
             pressure=pressure,
             velocity_damping=velocity_damping,
             rest_area=rest_area,

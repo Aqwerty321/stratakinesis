@@ -153,6 +153,12 @@ class SoftBody(Component):
     ``pymunk.Circle`` collision shapes; interior nodes are invisible to
     physics collisions (mass only).
 
+    The spring network has three tiers:
+      * **structural** — horizontal + vertical (grid) or radial + circumferential
+        (radial).  Maintain overall shape.
+      * **shear** — diagonal springs that resist shearing deformation.
+      * **bending** — 2-away connections that resist folding / angular collapse.
+
     Fields
     ------
     nodes          : all pymunk Bodies that make up the mesh.
@@ -162,11 +168,12 @@ class SoftBody(Component):
     stiffness      : spring rest stiffness (N/world-unit).
     damping        : spring damping coefficient.
     node_radius    : collision radius of each perimeter node circle.
-    pressure       : internal pressure coefficient (legacy, unused by position solver).
+    node_density   : mesh resolution — nodes per world unit. When > 0, overrides
+                     explicit cols/rows (rect) or rings/segments (circle).
     velocity_damping: per-step velocity multiplier (0..1). Prevents runaway.
-    rest_area      : initial surface polygon area (computed at creation).
-    rest_angles    : initial interior angles at each surface vertex (radians).
-                     Computed at registration; used for angular strain resistance.
+    pressure       : (legacy, unused) internal pressure coefficient.
+    rest_area      : (legacy, unused) initial surface polygon area.
+    rest_angles    : (legacy, unused) initial interior angles.
     debug_render   : when True, render individual nodes+springs instead of mesh.
     topology       : ``"grid"`` or ``"radial"`` — informational tag.
     """
@@ -177,8 +184,9 @@ class SoftBody(Component):
     stiffness: float = 300.0
     damping: float = 10.0
     node_radius: float = 0.12
-    pressure: float = 80.0
+    node_density: float = 0.0
     velocity_damping: float = 0.995
+    pressure: float = 80.0
     rest_area: float = 0.0
     rest_angles: list[float] = field(default_factory=list, repr=False)
     debug_render: bool = False

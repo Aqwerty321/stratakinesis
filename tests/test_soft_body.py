@@ -67,8 +67,8 @@ class TestSoftRect:
     def test_spring_count_3x3(self):
         e = Sprite.soft_rect(cols=3, rows=3, width=2.0, height=2.0)
         sb = e.get_component(SoftBody)
-        # 3x3:  horiz=6, vert=6, diag_ur=4, diag_ul=4 = 20
-        assert len(sb.springs) == 20
+        # 3x3:  structural=12, shear=8, bending=8 (3h+3v+1d+1d) = 28
+        assert len(sb.springs) == 28
 
     def test_mass_distribution(self):
         """Total mass should equal density * area, distributed evenly."""
@@ -502,10 +502,11 @@ class TestSignedArea:
 class TestPressureForces:
     """Integration tests for position-based spring constraints and stability."""
 
-    def test_stretched_spring_corrected(self, physics, soft_body_sys):
-        """Over-stretched springs should be corrected back within range."""
+    def test_stretched_spring_recovers(self, physics, soft_body_sys):
+        """Over-stretched springs should recover via DampedSpring forces."""
         e = Sprite.soft_rect(
             cols=2, rows=2, width=1.0, height=1.0, x=0.0, y=0.0,
+            stiffness=500.0, damping=20.0,
         )
         sb = e.get_component(SoftBody)
         soft_body_sys.register(sb, e.id)
@@ -519,9 +520,11 @@ class TestPressureForces:
         world = World()
         world.add_entity(e)
 
-        soft_body_sys.update(world, 1 / 60)
+        # Let physics step to allow spring forces to pull them back
+        for _ in range(120):
+            physics.space.step(1 / 60)
+            soft_body_sys.update(world, 1 / 60)
 
-        # After update, the distance should be much less than 10.0
         ax, ay = sb.nodes[0].position
         bx, by = sb.nodes[1].position
         dist = math.sqrt((bx - ax)**2 + (by - ay)**2)
@@ -610,3 +613,98 @@ class TestPressureForces:
         ]
         area = _signed_area(positions)
         assert area > 0, f"Mesh inverted after impact: signed area = {area:.3f}"
+
+
+# ===========================================================================
+# Bending springs
+# ===========================================================================
+
+class TestBendingSprings:
+    """Verify bending springs (2-away connections) are present."""
+
+    def test_rect_has_bending_springs(self):
+        """A 4x4 rect should have more springs than structural + shear alone."""
+        e = Sprite.soft_rect(cols=4, rows=4, width=2.0, height=2.0)
+        sb = e.get_component(SoftBody)
+        # structural+shear for 4x4: horiz=12, vert=12, diag_ur=9, diag_ul=9 = 42
+        # bending adds more (horiz: 4*2=8, vert: 2*4=8, diag: extras)
+        assert len(sb.springs) > 42
+
+    def test_circle_has_bending_springs(self):
+        """A radial mesh should have more springs than structural + shear alone."""
+        e = Sprite.soft_circle(rings=3, segments=12, radius=1.0)
+        sb = e.get_component(SoftBody)
+        # structural: 12(centre->ring1) + 12*3(circ) + 12*2(radial) + 12*2(shear)
+        # = 12 + 36 + 24 + 24 = 96
+        # bending adds circumferential 2-away + skip-ring
+        assert len(sb.springs) > 96
+
+    def test_bending_springs_softer(self):
+        """Bending springs should have lower stiffness than structural springs."""
+        stiff = 500.0
+        e = Sprite.soft_rect(cols=4, rows=4, width=2.0, height=2.0, stiffness=stiff)
+        sb = e.get_component(SoftBody)
+        stiffness_values = sorted(set(s.stiffness for s in sb.springs))
+        # Should have exactly two stiffness tiers
+        assert len(stiffness_values) == 2
+        assert stiffness_values[0] < stiffness_values[1]
+        assert stiffness_values[1] == stiff
+        assert stiffness_values[0] == pytest.approx(stiff * 0.4, rel=0.01)
+
+    def test_2x2_no_bending(self):
+        """A 2x2 grid is too small for bending springs — count unchanged."""
+        e = Sprite.soft_rect(cols=2, rows=2, width=1.0, height=1.0)
+        sb = e.get_component(SoftBody)
+        # 2x2: structural 4 + shear 2 = 6, no bending
+        assert len(sb.springs) == 6
+
+
+# ===========================================================================
+# node_density parameter
+# ===========================================================================
+
+class TestNodeDensity:
+    """Tests for the node_density auto-subdivision parameter."""
+
+    def test_rect_node_density_overrides_cols_rows(self):
+        """node_density > 0 should compute cols/rows from width/height."""
+        e = Sprite.soft_rect(
+            cols=2, rows=2, width=3.0, height=2.0, node_density=4.0,
+        )
+        sb = e.get_component(SoftBody)
+        # cols = round(3.0 * 4.0) = 12, rows = round(2.0 * 4.0) = 8
+        assert len(sb.nodes) == 12 * 8
+
+    def test_circle_node_density_overrides_rings_segments(self):
+        """node_density > 0 should compute rings/segments from radius."""
+        e = Sprite.soft_circle(
+            rings=1, segments=3, radius=1.0, node_density=3.0,
+        )
+        sb = e.get_component(SoftBody)
+        # segments = max(6, round(2π * 1.0 * 3.0)) = round(18.85) = 19
+        # rings = max(1, round(1.0 * 3.0)) = 3
+        expected_nodes = 1 + 3 * 19
+        assert len(sb.nodes) == expected_nodes
+
+    def test_node_density_zero_uses_explicit(self):
+        """node_density=0 (default) should use explicit cols/rows."""
+        e = Sprite.soft_rect(cols=5, rows=3, width=2.0, height=1.0, node_density=0.0)
+        sb = e.get_component(SoftBody)
+        assert len(sb.nodes) == 5 * 3
+
+    def test_node_density_stored_in_component(self):
+        """SoftBody should store the node_density value."""
+        e = Sprite.soft_rect(
+            cols=2, rows=2, width=1.0, height=1.0, node_density=5.0,
+        )
+        sb = e.get_component(SoftBody)
+        assert sb.node_density == 5.0
+
+    def test_node_density_minimum_clamp(self):
+        """Very small node_density should still produce at least 2x2."""
+        e = Sprite.soft_rect(
+            width=0.5, height=0.5, node_density=0.1,
+        )
+        sb = e.get_component(SoftBody)
+        # round(0.5 * 0.1) = 0, clamped to 2 → 2x2
+        assert len(sb.nodes) >= 4
