@@ -322,8 +322,9 @@ class Sprite:
         nodes: list[pymunk.Body] = []
         for r in range(rows):
             for c in range(cols):
-                moment = pymunk.moment_for_circle(node_mass, 0, node_radius)
-                body = pymunk.Body(node_mass, moment)
+                # Infinite moment prevents rotation — keeps collision
+                # circle offsets pointing inward permanently.
+                body = pymunk.Body(node_mass, float('inf'))
                 body.position = (x0 + c * cell_dx, y0 + r * cell_dy)
                 nodes.append(body)
 
@@ -529,9 +530,8 @@ class Sprite:
             # Half the arc spacing: adjacent circles just touch.
             node_radius = outer_arc * 0.5
 
-        # Centre node
-        moment_centre = pymunk.moment_for_circle(node_mass, 0, node_radius)
-        centre = pymunk.Body(node_mass, moment_centre)
+        # Centre node — infinite moment prevents rotation.
+        centre = pymunk.Body(node_mass, float('inf'))
         centre.position = (x, y)
 
         nodes: list[pymunk.Body] = [centre]  # index 0 = centre
@@ -544,8 +544,7 @@ class Sprite:
                 angle = 2.0 * math.pi * seg / segments
                 bx = x + ring_r * math.cos(angle)
                 by = y + ring_r * math.sin(angle)
-                moment = pymunk.moment_for_circle(node_mass, 0, node_radius)
-                body = pymunk.Body(node_mass, moment)
+                body = pymunk.Body(node_mass, float('inf'))
                 body.position = (bx, by)
                 nodes.append(body)
 
