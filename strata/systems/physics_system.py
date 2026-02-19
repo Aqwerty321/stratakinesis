@@ -68,6 +68,10 @@ class PhysicsSystem(System):
         self._begin_events: list[CollisionEvent] = []
         self._end_events: list[CollisionEvent] = []
 
+        # Post-substep callbacks — called after every space.step().
+        # Used by SoftBodySystem for per-substep COM momentum correction.
+        self._post_substep_hooks: list = []
+
         # Register a default collision handler to capture all pair events.
         # pymunk 7 API: space.on_collision(None, None, begin=fn, separate=fn)
         # None, None = wildcard (any collision type pair).
@@ -160,6 +164,9 @@ class PhysicsSystem(System):
         sub_dt = dt / n
         for _ in range(n):
             self.space.step(sub_dt)
+            # Run post-substep hooks (e.g. soft-body COM correction).
+            for hook in self._post_substep_hooks:
+                hook(sub_dt)
         self._sync_transforms(world)
 
     def _sync_transforms(self, world: World) -> None:

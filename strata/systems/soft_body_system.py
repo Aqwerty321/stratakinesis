@@ -3,11 +3,15 @@
 # Space, syncs node positions → Visual.vertices + Transform centroid each step,
 # and provides clean teardown on entity removal.
 #
+# Uses numpy arrays for batch processing of all node positions and velocities.
+# This ensures consistent (symmetric) treatment of every node and enables a
+# center-of-mass momentum correction that eliminates solver-induced drift.
+#
 # The spring network (structural + shear + bending springs) provides all
 # the structural integrity.  This system only:
-#   1. NaN guard — reset broken nodes.
-#   2. Velocity damping + hard speed cap — prevents runaway energy.
-#   3. Centroid sync + visual vertex rebuild.
+#   1. NaN guard — reset broken nodes (vectorised).
+#   2. COM momentum correction — remove net drift from solver asymmetry.
+#   3. Centroid sync + visual vertex rebuild (vectorised).
 
 from __future__ import annotations
 import math
@@ -15,6 +19,7 @@ from typing import TYPE_CHECKING
 
 import pymunk
 
+from strata.backend.array import xp
 from strata.systems.base import System
 from strata.ecs.components import SoftBody, Visual, Transform
 from strata.ecs.world import World
@@ -88,6 +93,11 @@ class SoftBodySystem(System):
         self._physics = physics_system
         # Track which entities have been registered so we don't double-add.
         self._registered: set[int] = set()
+        # Track soft bodies for per-substep COM correction.
+        self._soft_bodies: list[SoftBody] = []
+        # Register a post-substep hook so COM correction runs every
+        # space.step(), not just once per frame.
+        physics_system._post_substep_hooks.append(self._post_substep_com_correct)
 
     # ------------------------------------------------------------------
     # Registration
@@ -132,6 +142,7 @@ class SoftBodySystem(System):
                 self._physics._shape_to_entity[shape] = entity_id
 
         self._registered.add(entity_id)
+        self._soft_bodies.append(soft)
 
     def unregister(self, soft: SoftBody, entity_id: int = -1) -> None:
         """Remove all bodies, springs, and surface shapes from the pymunk space."""
@@ -151,50 +162,94 @@ class SoftBodySystem(System):
                 space.remove(body)
 
         self._registered.discard(entity_id)
+        try:
+            self._soft_bodies.remove(soft)
+        except ValueError:
+            pass
+
+    # ------------------------------------------------------------------
+    # Per-substep COM correction (called by PhysicsSystem after each step)
+    # ------------------------------------------------------------------
+
+    def _post_substep_com_correct(self, sub_dt: float) -> None:
+        """Remove net horizontal momentum from each soft body.
+
+        pymunk's sequential collision solver creates asymmetric impulses
+        across the many independent node-bodies of a soft mesh.  Correcting
+        the mass-weighted mean *horizontal* velocity to zero after every
+        substep prevents those impulses from accumulating into coherent
+        sideways drift.
+
+        Only the X axis is corrected; Y is left alone because gravity gives
+        every node the same downward acceleration and zeroing COM-Y would
+        make the body float.
+        """
+        for soft in self._soft_bodies:
+            nodes = soft.nodes
+            n = len(nodes)
+            if n == 0:
+                continue
+
+            # Accumulate mass-weighted horizontal velocity
+            total_mass = 0.0
+            weighted_vx = 0.0
+            for body in nodes:
+                m = body.mass
+                total_mass += m
+                weighted_vx += body.velocity.x * m
+
+            if total_mass <= 0:
+                continue
+
+            com_vx = weighted_vx / total_mass
+            if abs(com_vx) < 1e-12:
+                continue
+
+            # Subtract COM horizontal drift from every node
+            for body in nodes:
+                body.velocity = (body.velocity.x - com_vx, body.velocity.y)
 
     # ------------------------------------------------------------------
     # System update
     # ------------------------------------------------------------------
 
     def update(self, world: World, dt: float) -> None:
-        """Clamp velocities, sync centroid + visual vertices each step.
+        """Sync centroid + visual vertices each step, using array ops.
 
-        The spring network (structural + shear + bending) does all the
-        structural work via pymunk's DampedSpring solver.  This method only
-        applies safety clamps and syncs the ECS components.
+        After pymunk steps the space (with per-substep COM correction),
+        this method:
+          0. Reads all node positions into numpy arrays.
+          1. NaN guard — detects and resets any broken nodes (vectorised).
+          2. Computes centroid and rebuilds visual vertices (vectorised).
         """
         for entity in world.get_entities_with(SoftBody, Transform, Visual):
             soft: SoftBody = entity.get_component(SoftBody)
             transform: Transform = entity.get_component(Transform)
             visual: Visual = entity.get_component(Visual)
 
-            if not soft.nodes:
-                continue
-
-            # --- 0. NaN guard ---
-            _has_nan = False
-            for body in soft.nodes:
-                px, py = body.position
-                if px != px or py != py:
-                    _has_nan = True
-                    break
-            if _has_nan:
-                for body in soft.nodes:
-                    body.velocity = (0, 0)
-                    body.force = (0, 0)
-                    px, py = body.position
-                    if px != px or py != py:
-                        body.position = (transform.x, transform.y)
-                continue
-
-            # --- 1. Compute centroid of all nodes ---
-            cx, cy = 0.0, 0.0
-            for body in soft.nodes:
-                cx += body.position.x
-                cy += body.position.y
             n = len(soft.nodes)
-            cx /= n
-            cy /= n
+            if n == 0:
+                continue
+
+            # --- 0. Batch-read positions into array ---
+            pos = xp.empty((n, 2), dtype=xp.float64)
+            for i, body in enumerate(soft.nodes):
+                pos[i, 0] = body.position.x
+                pos[i, 1] = body.position.y
+
+            # --- 1. NaN guard (vectorised) ---
+            nan_mask = xp.isnan(pos[:, 0]) | xp.isnan(pos[:, 1])
+            if xp.any(nan_mask):
+                for i in range(n):
+                    if nan_mask[i]:
+                        soft.nodes[i].position = (transform.x, transform.y)
+                    soft.nodes[i].velocity = (0, 0)
+                    soft.nodes[i].force = (0, 0)
+                continue
+
+            # --- 2. Compute centroid (array op) ---
+            centroid = xp.mean(pos, axis=0)
+            cx, cy = float(centroid[0]), float(centroid[1])
 
             # Snapshot previous transform for interpolation
             transform.prev_x = transform.x
@@ -205,10 +260,9 @@ class SoftBodySystem(System):
             transform.y = cy
             transform.angle = 0.0
 
-            # --- 2. Rebuild visual vertices ---
-            new_verts = []
-            for idx in soft.surface_indices:
-                bx = soft.nodes[idx].position.x
-                by = soft.nodes[idx].position.y
-                new_verts.append((bx - cx, by - cy))
-            visual.vertices = new_verts
+            # --- 3. Rebuild visual vertices (array op) ---
+            surf_idx = soft.surface_indices
+            surf_pos = pos[surf_idx]  # (S, 2) — surface node positions
+            local = surf_pos - centroid[xp.newaxis, :]
+            visual.vertices = [(float(local[i, 0]), float(local[i, 1]))
+                               for i in range(len(surf_idx))]
