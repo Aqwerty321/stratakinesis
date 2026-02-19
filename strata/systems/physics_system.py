@@ -72,6 +72,10 @@ class PhysicsSystem(System):
         # Used by SoftBodySystem for per-substep COM momentum correction.
         self._post_substep_hooks: list = []
 
+        # Shared static body used as world anchor by all Rigs.
+        # Lazily created on first access.
+        self._static_body: pymunk.Body | None = None
+
         # Register a default collision handler to capture all pair events.
         # pymunk 7 API: space.on_collision(None, None, begin=fn, separate=fn)
         # None, None = wildcard (any collision type pair).
@@ -86,6 +90,13 @@ class PhysicsSystem(System):
     # Body / shape registration (called by Scene on entity add)
     # ------------------------------------------------------------------
 
+    @property
+    def static_body(self) -> pymunk.Body:
+        """A shared world-space static body used as the anchor for all Rigs."""
+        if self._static_body is None:
+            self._static_body = pymunk.Body(body_type=pymunk.Body.STATIC)
+        return self._static_body
+
     def register(self, physics: Physics, entity_id: int = -1) -> None:
         """Add a Physics component's body and shape to the pymunk space.
 
@@ -95,9 +106,9 @@ class PhysicsSystem(System):
         entity_id : the ECS entity ID; stored for collision-event lookup.
                     Defaults to -1 (unregistered) for backward compatibility.
         """
-        if physics.body is not None:
+        if physics.body is not None and physics.body not in self.space.bodies:
             self.space.add(physics.body)
-        if physics.shape is not None:
+        if physics.shape is not None and physics.shape not in self.space.shapes:
             # Apply layer / mask bitmasks as a pymunk ShapeFilter.
             physics.shape.filter = pymunk.ShapeFilter(
                 categories=physics.collision_layer,

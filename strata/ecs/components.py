@@ -86,46 +86,16 @@ class Visual(Component):
     outline: tuple[int, ...] | None = (255, 255, 255, 200)
 
 
-# ---------------------------------------------------------------------------
-# Rig (data model — execution deferred post-v0)
-# ---------------------------------------------------------------------------
-
-@dataclass
-class MotorRig(Component):
-    """Declarative motor rig: drives a body's angular velocity toward a target.
-
-    RigSystem creates a ``pymunk.SimpleMotor`` between the entity's body and
-    a shared static anchor body, driving angular velocity to ``target_rate``.
-
-    Fields
-    ------
-    target_rate : target angular velocity in radians/second (+ve = CCW).
-    max_force   : pymunk motor maximum force (Nm). Default is effectively unlimited.
-    enabled     : set False to zero the rate without removing the constraint.
-
-    Private (managed by RigSystem — do not set manually)
-    -------
-    _constraint : cached pymunk.SimpleMotor; created on first RigSystem update.
-    _anchor_body: static pymunk.Body that anchors the motor constraint.
-    """
-    target_rate: float = 0.0
-    max_force: float = 1e8
-    enabled: bool = True
-    # --- private cache fields ---
-    _constraint: Any = field(default=None, repr=False, init=False, compare=False)
-    _anchor_body: Any = field(default=None, repr=False, init=False, compare=False)
-
-
 @dataclass
 class PropertyBinding(Component):
     """Declarative property binding: mirrors a Transform attribute from one entity to another.
 
-    RigSystem each step reads ``source_entity.Transform.{source_attr}`` and writes
+    BindingSystem each step reads ``source_entity.Transform.{source_attr}`` and writes
     ``entity.Transform.{target_attr} = value * scale + offset``.
 
     Fields
     ------
-    source_entity_id : id of the source Entity (set automatically by Sprite helpers).
+    source_entity_id : id of the source Entity.
     source_attr      : name of the attribute on the source entity's Transform.
     target_attr      : name of the attribute on this entity's Transform.
     scale            : multiply the source value before writing.
@@ -194,4 +164,5 @@ class SoftBody(Component):
 
 
 # Convenience alias used by type hints elsewhere
-RigComponent = MotorRig | PropertyBinding
+# (MotorRig was replaced by HingeMotorRig Rig assembly in strata.rigs)
+RigComponent = PropertyBinding

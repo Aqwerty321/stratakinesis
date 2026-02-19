@@ -27,7 +27,7 @@ from strata.ecs.components import Physics as _Physics, SoftBody as _SoftBody
 from strata.render.camera import Camera
 from strata.systems.physics_system import PhysicsSystem, CollisionEvent
 from strata.systems.render_system import RenderSystem
-from strata.systems.rig_system import RigSystem
+from strata.systems.binding_system import BindingSystem
 from strata.systems.soft_body_system import SoftBodySystem
 
 
@@ -98,6 +98,24 @@ class Scene(World):
             super().add_entity(entity)
             self._maybe_register(entity)
 
+    def add_rig(self, rig: "Rig") -> None:  # type: ignore[name-defined]
+        """Register all entities in a Rig, then build its constraints.
+
+        This is the single entry point for adding a constrained assembly to the
+        scene.  All owned entities are added first (so their physics bodies
+        exist), then ``rig._register()`` builds the pymunk constraints.
+
+        Parameters
+        ----------
+        rig : any Rig subclass (ChainRig, GearTrainRig, HingeMotorRig, ...).
+        """
+        for entity in rig._entities:
+            # add_entity is idempotent for already-registered entities.
+            self.add_entity(entity)
+        if self._physics_system is not None:
+            rig._register(self._physics_system.space,
+                          self._physics_system.static_body)
+
 
 class Game:
     """
@@ -166,17 +184,17 @@ class Game:
         self.physics: PhysicsSystem = PhysicsSystem(gravity=gravity, substeps=physics_substeps)
         self.soft_body: SoftBodySystem = SoftBodySystem(physics_system=self.physics)
         self._render: RenderSystem = RenderSystem()
-        self._rig: RigSystem = RigSystem(physics_system=self.physics)
+        self._binding: BindingSystem = BindingSystem()
 
         # Wire systems into scene so add_entity/add_entities auto-register
         self.scene._physics_system = self.physics
         self.scene._soft_body_system = self.soft_body
 
         # System order: Physics first (steps pymunk space), then SoftBody
-        # (syncs node positions to Transform/Visual), then Rig, then Render.
+        # (syncs node positions to Transform/Visual), then Binding, then Render.
         self.scene.add_system(self.physics)
         self.scene.add_system(self.soft_body)
-        self.scene.add_system(self._rig)
+        self.scene.add_system(self._binding)
         self.scene.add_system(self._render)
 
         # User-supplied hooks — assign callables after construction:
