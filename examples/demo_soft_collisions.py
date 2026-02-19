@@ -162,13 +162,13 @@ soft_entities: list = []
 
 
 def spawn_defaults():
-    """Spawn the default set of soft bodies in a staggered cluster."""
+    """Spawn the default set of soft bodies spread across the arena."""
     positions = [
-        (-1.5, 4.5),
-        ( 1.5, 5.0),
-        ( 0.0, 6.0),
-        (-2.5, 5.5),
-        ( 2.5, 4.0),
+        (-4.5, 5.0),
+        (-1.8, 6.5),
+        ( 1.8, 7.0),
+        ( 4.5, 5.5),
+        ( 0.0, 8.5),
     ]
     for sx, sy in positions:
         e = make_soft_shape(sx, sy)
