@@ -217,6 +217,10 @@ class Game:
         # on_collision_end: called after each physics step for every contact
         # that separated in that step.  Receives a CollisionEvent.
         self.on_collision_end: Callable[[CollisionEvent], None] | None = None
+        # on_draw: called once per rendered frame *after* scene.draw() but
+        # *before* the F3 overlay and display.flip().  Receives
+        # (surface, camera) so you can do custom pygame / gfxdraw calls.
+        self.on_draw: Callable | None = None
 
         # Input buffer — replaces pygame.event.get() inside run().
         # Access as game.input for key-polling and event history.
@@ -319,6 +323,8 @@ class Game:
             # --- Render (pass alpha for sub-step interpolation) ---
             alpha = accumulator / FIXED_DT
             self.scene.draw(self._surface, self.camera, alpha)
+            if self.on_draw:
+                self.on_draw(self._surface, self.camera)
 
             # --- F3 overlay ---
             if self._show_overlay:

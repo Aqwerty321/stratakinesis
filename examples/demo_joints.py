@@ -130,17 +130,20 @@ if __name__ == "__main__":
     game.scene.add_entity(ball)
 
     # ── 5. gear train (bottom-centre) ────────────────────────────────────────
-    # Three gears: large driver → small idler → medium follower.
-    # Placed so all gear centres sit well above the floor.
-    GEAR_X, GEAR_Y = -0.3, FLOOR_Y + 0.85
+    # Radii in 5:3:4 ratio → 15:9:12 teeth → exact integer gear ratios.
+    # Module = 2*0.45/9 ≈ 0.10 world units → ~8 px/tooth at 1280-wide window.
+    GEAR_X, GEAR_Y = -1.0, FLOOR_Y + 0.82
     gears = GearTrainRig(
-        radii       = [0.65, 0.38, 0.52],
-        x           = GEAR_X,
-        y           = GEAR_Y,
-        motor_rate  = 3.0,
-        motor_force = 1e6,
-        density     = 1.0,
-        colors      = COL_GEARS,
+        radii           = [0.75, 0.45, 0.60],
+        x               = GEAR_X,
+        y               = GEAR_Y,
+        motor_rate      = 3.0,
+        motor_force     = 1e6,
+        density         = 1.2,
+        colors          = COL_GEARS,
+        tooth_frac      = 0.46,
+        tip_frac        = 0.26,
+        teeth_per_unit  = 20.0,
     )
     game.scene.add_rig(gears)
 
@@ -174,6 +177,7 @@ if __name__ == "__main__":
 
     game.on_fixed_update = on_fixed_update
     game.on_update = on_update
+    game.on_draw   = lambda surf, cam: gears.draw(surf, cam)
 
     print(
         "STRATA rig demo\n"
