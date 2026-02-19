@@ -316,9 +316,8 @@ class Sprite:
         if node_radius <= 0:
             # min spacing between adjacent perimeter nodes
             min_gap = min(cell_dx, cell_dy)
-            # Just large enough that adjacent circles touch, without
-            # protruding far beyond the visual polygon.
-            node_radius = min_gap * 0.35
+            # Half-spacing: adjacent circles just touch along the edge.
+            node_radius = min_gap * 0.5
 
         nodes: list[pymunk.Body] = []
         for r in range(rows):
@@ -395,9 +394,39 @@ class Sprite:
         # Collision shapes on ALL nodes (not just perimeter).
         # Self-collision is prevented by ShapeFilter.group at registration.
         # Interior shapes must exist to prevent nodes passing through floors.
+        #
+        # Perimeter nodes get an inward offset so their collision circle's
+        # outer edge aligns with the visual polygon edge (the node position).
+        # The inward direction is the average of the two adjacent edge
+        # inward normals for a CCW polygon.
+        n_surf = len(surface_indices)
+        perimeter_set = set(surface_indices)
+        perimeter_positions = [(nodes[si].position.x, nodes[si].position.y)
+                               for si in surface_indices]
+        inward_offsets: dict[int, tuple[float, float]] = {}
+        for i in range(n_surf):
+            px, py = perimeter_positions[(i - 1) % n_surf]
+            cx, cy = perimeter_positions[i]
+            nx, ny = perimeter_positions[(i + 1) % n_surf]
+            # Edge prev->curr inward normal (CCW polygon: inward = (-dy, dx))
+            dx1, dy1 = cx - px, cy - py
+            inx1, iny1 = -dy1, dx1
+            # Edge curr->next inward normal
+            dx2, dy2 = nx - cx, ny - cy
+            inx2, iny2 = -dy2, dx2
+            # Average and normalise
+            anx, any_ = inx1 + inx2, iny1 + iny2
+            length = math.hypot(anx, any_)
+            if length > 1e-9:
+                anx /= length
+                any_ /= length
+            inward_offsets[surface_indices[i]] = (anx * node_radius,
+                                                  any_ * node_radius)
+
         surface_shapes: list[pymunk.Circle] = []
         for idx in range(len(nodes)):
-            shape = pymunk.Circle(nodes[idx], node_radius)
+            offset = inward_offsets.get(idx, (0, 0))
+            shape = pymunk.Circle(nodes[idx], node_radius, offset=offset)
             shape.elasticity = 0.3
             shape.friction = 0.8
             surface_shapes.append(shape)
@@ -497,9 +526,8 @@ class Sprite:
         # Auto-calculate node_radius to seal perimeter gaps if not explicit
         if node_radius <= 0:
             outer_arc = 2.0 * math.pi * radius / segments
-            # Just large enough that adjacent circles touch, without
-            # protruding far beyond the visual polygon.
-            node_radius = outer_arc * 0.35
+            # Half the arc spacing: adjacent circles just touch.
+            node_radius = outer_arc * 0.5
 
         # Centre node
         moment_centre = pymunk.moment_for_circle(node_mass, 0, node_radius)
@@ -589,9 +617,25 @@ class Sprite:
         # Collision shapes on ALL nodes (not just outermost ring).
         # Self-collision is prevented by ShapeFilter.group at registration.
         # Interior shapes prevent nodes from tunneling through floors.
+        #
+        # Perimeter (outer ring) nodes get an inward offset so their
+        # collision circle's outer edge aligns with the visual polygon
+        # edge.  For a circle the inward direction is simply toward the
+        # centre of the mesh.
+        perimeter_set = set(surface_indices)
+        inward_offsets: dict[int, tuple[float, float]] = {}
+        for si in surface_indices:
+            bx, by = nodes[si].position.x, nodes[si].position.y
+            dx, dy = x - bx, y - by  # toward centre
+            d = math.hypot(dx, dy)
+            if d > 1e-9:
+                inward_offsets[si] = (dx / d * node_radius,
+                                     dy / d * node_radius)
+
         surface_shapes: list[pymunk.Circle] = []
         for idx in range(len(nodes)):
-            shape = pymunk.Circle(nodes[idx], node_radius)
+            offset = inward_offsets.get(idx, (0, 0))
+            shape = pymunk.Circle(nodes[idx], node_radius, offset=offset)
             shape.elasticity = 0.3
             shape.friction = 0.8
             surface_shapes.append(shape)
