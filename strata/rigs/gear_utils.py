@@ -145,35 +145,38 @@ def select_num_teeth(
 
 def initial_tooth_phases(
     num_teeth: list[int],
+    lock_frac: float = 0.15,
 ) -> list[float]:
     """Compute per-gear initial angle offsets so adjacent gears visually mesh.
 
-    Gears are placed left-to-right, so adjacent gears touch at:
-      gear i  → contact is on its RIGHT side (angle = 0)
-      gear i+1 → contact is on its LEFT side  (angle = π)
+    Gears are placed left-to-right, touching at:
+      gear i   right side  → world angle = 0
+      gear i+1 left  side  → world angle = π
 
-    For a tooth on gear i to slot into the gap on gear i+1:
-      • gear 0 : tooth tip at angle 0  → phase = 0           (tooth k=0 centred at 0)
-      • gear 1 : root gap at angle π   → phase = π + pitch/2  (gap between teeth at π)
-      • gear 2 : tooth tip at angle 0  → phase = pitch/2      (tooth at 0 again)
-      • gear k : alternates based on contact side
+    Adjacent gears counter-rotate (negative GearJoint ratio), so face states
+    alternate: even-indexed gears have a TOOTH at contact; odd-indexed gears
+    have a GAP at contact (holds for even tooth counts).
 
-    The sign flip from the negative GearJoint ratio means driven gears rotate
-    opposite to the driver, so the angular offset between meshes propagates
-    correctly at run-time.  The static phases here just set t=0 alignment.
+    Phase formula
+    -------------
+    • Even gear i:  phase = lock_frac × pitch_i
+      Tooth centre at lock_frac×pitch past angle 0 — tip sits slightly inside
+      the neighbouring gap for a visual "locked" look at t = 0.
+    • Odd  gear i:  phase = π − pitch_i / 2
+      Tooth centres at π ± pitch/2; gap midpoint exactly at π (left contact)
+      and at 0 (right contact) for even tooth counts.
 
-    Returns a list of phase offsets (radians) to *add* to body.angle.
+    lock_frac : fraction of a pitch to offset even-gear teeth from the contact
+    angle.  Range (0, 0.4); default 0.15.
+
+    Returns a list of phase offsets (radians) added to ``body.angle`` in draw().
     """
     phases = []
     for i, n in enumerate(num_teeth):
         pitch = (2.0 * math.pi) / n
-        if i == 0:
-            # First gear: align a tooth tip to angle 0 (right, contact side).
-            # tooth k centred at phase + k*pitch; for k=0 centred at phase=0.
-            phases.append(0.0)
+        if i % 2 == 0:
+            phases.append(lock_frac * pitch)
         else:
-            # Driven gear: align a root gap (valley between teeth) to angle π
-            # (left side, where the previous gear's tooth presses in).
-            # A valley sits halfway between tooth centres → phase = π + pitch/2.
-            phases.append(math.pi + pitch * 0.5)
+            # Gap centre exactly at π: teeth at π ± pitch/2.
+            phases.append(math.pi - pitch * 0.5)
     return phases

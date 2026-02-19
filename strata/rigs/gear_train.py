@@ -89,6 +89,7 @@ class GearTrainRig(Rig):
         tooth_frac: float = 0.46,
         tip_frac: float = 0.26,
         teeth_per_unit: float = 14.0,
+        lock_frac: float = 0.15,
     ) -> None:
         super().__init__()
 
@@ -101,8 +102,9 @@ class GearTrainRig(Rig):
         # ── tooth geometry ───────────────────────────────────────────────────
         self.tooth_frac     = tooth_frac
         self.tip_frac       = tip_frac
+        self.lock_frac      = lock_frac
         self.num_teeth, self.module = select_num_teeth(radii, teeth_per_unit)
-        self._tooth_phases  = initial_tooth_phases(self.num_teeth)
+        self._tooth_phases  = initial_tooth_phases(self.num_teeth, lock_frac)
         self._colors        = [palette[i % len(palette)] for i in range(len(radii))]
 
         # ── gear centres: place left-to-right tangentially ───────────────────
