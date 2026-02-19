@@ -130,8 +130,9 @@ if __name__ == "__main__":
     game.scene.add_entity(ball)
 
     # ── 5. gear train (bottom-centre) ────────────────────────────────────────
-    # Radii in 5:3:4 ratio → 15:9:12 teeth → exact integer gear ratios.
-    # Module = 2*0.45/9 ≈ 0.10 world units → ~8 px/tooth at 1280-wide window.
+    # Radii in 5:3:4 ratio with teeth_per_unit=26.67 → exactly [20, 12, 16] teeth.
+    # Module = 0.075 wu → 6 px addendum, 9.4 px dedendum (13.5 px total tooth height).
+    # tooth_frac=0.52 / tip_frac=0.18 → tip is only 35% of root width = clear trapezoid.
     GEAR_X, GEAR_Y = -1.0, FLOOR_Y + 0.82
     gears = GearTrainRig(
         radii           = [0.75, 0.45, 0.60],
@@ -141,9 +142,9 @@ if __name__ == "__main__":
         motor_force     = 1e6,
         density         = 1.2,
         colors          = COL_GEARS,
-        tooth_frac      = 0.46,
-        tip_frac        = 0.26,
-        teeth_per_unit  = 20.0,
+        tooth_frac      = 0.52,
+        tip_frac        = 0.18,
+        teeth_per_unit  = 26.67,
     )
     game.scene.add_rig(gears)
 
