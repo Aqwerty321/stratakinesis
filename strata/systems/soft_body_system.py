@@ -261,8 +261,17 @@ class SoftBodySystem(System):
             transform.angle = 0.0
 
             # --- 3. Rebuild visual vertices (array op) ---
+            # Push each surface vertex outward by node_radius so the drawn
+            # polygon matches the collision boundary (pymunk.Circle radius).
             surf_idx = soft.surface_indices
             surf_pos = pos[surf_idx]  # (S, 2) — surface node positions
             local = surf_pos - centroid[xp.newaxis, :]
+            nr = soft.node_radius
+            dist = xp.sqrt(local[:, 0] ** 2 + local[:, 1] ** 2)
+            # Avoid division by zero for nodes at centroid
+            safe_dist = xp.where(dist > 1e-9, dist, 1.0)
+            expand = nr / safe_dist
+            local[:, 0] += local[:, 0] * expand
+            local[:, 1] += local[:, 1] * expand
             visual.vertices = [(float(local[i, 0]), float(local[i, 1]))
                                for i in range(len(surf_idx))]

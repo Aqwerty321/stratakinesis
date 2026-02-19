@@ -402,14 +402,21 @@ class Sprite:
             shape.friction = 0.8
             surface_shapes.append(shape)
 
-        # Perimeter vertices for visual mesh (local coords relative to centre)
-        perimeter_verts = []
-        for idx in surface_indices:
-            bx, by = nodes[idx].position
-            perimeter_verts.append((bx - x, by - y))
+        # Compute rest area from raw node positions (physical mesh area).
+        raw_verts = [(nodes[idx].position.x - x, nodes[idx].position.y - y)
+                     for idx in surface_indices]
+        rest_area = _shoelace_area(raw_verts)
 
-        # Compute rest area from perimeter polygon (for pressure forces)
-        rest_area = _shoelace_area(perimeter_verts)
+        # Perimeter vertices for visual mesh (local coords relative to centre).
+        # Push each vertex outward by node_radius so the drawn polygon
+        # matches the actual collision boundary (pymunk.Circle radius).
+        perimeter_verts = []
+        for lx, ly in raw_verts:
+            d = math.hypot(lx, ly)
+            if d > 1e-9:
+                lx += lx / d * node_radius
+                ly += ly / d * node_radius
+            perimeter_verts.append((lx, ly))
 
         entity = Entity()
         entity.add_component(Transform(x=x, y=y))
@@ -595,13 +602,20 @@ class Sprite:
             surface_shapes.append(shape)
 
         # Initial perimeter vertices (local coords relative to centre)
-        perimeter_verts = []
-        for idx in surface_indices:
-            bx, by = nodes[idx].position
-            perimeter_verts.append((bx - x, by - y))
+        # Compute rest area from raw node positions (physical mesh area).
+        raw_verts = [(nodes[idx].position.x - x, nodes[idx].position.y - y)
+                     for idx in surface_indices]
+        rest_area = _shoelace_area(raw_verts)
 
-        # Compute rest area from perimeter polygon (for pressure forces)
-        rest_area = _shoelace_area(perimeter_verts)
+        # Push each vertex outward by node_radius so the drawn polygon
+        # matches the actual collision boundary (pymunk.Circle radius).
+        perimeter_verts = []
+        for lx, ly in raw_verts:
+            d = math.hypot(lx, ly)
+            if d > 1e-9:
+                lx += lx / d * node_radius
+                ly += ly / d * node_radius
+            perimeter_verts.append((lx, ly))
 
         entity = Entity()
         entity.add_component(Transform(x=x, y=y))
