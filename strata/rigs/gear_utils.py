@@ -148,16 +148,32 @@ def initial_tooth_phases(
 ) -> list[float]:
     """Compute per-gear initial angle offsets so adjacent gears visually mesh.
 
-    For gear 0 the offset is 0.  For each subsequent gear the contact angle
-    is π (leftmost point, since gears are placed left-to-right), so we place a
-    root gap there by shifting the tooth pattern by half a pitch.
+    Gears are placed left-to-right, so adjacent gears touch at:
+      gear i  → contact is on its RIGHT side (angle = 0)
+      gear i+1 → contact is on its LEFT side  (angle = π)
 
-    Returns a list of phase offsets (radians) to *add* to the body angle when
-    building the tooth polygon.
+    For a tooth on gear i to slot into the gap on gear i+1:
+      • gear 0 : tooth tip at angle 0  → phase = 0           (tooth k=0 centred at 0)
+      • gear 1 : root gap at angle π   → phase = π + pitch/2  (gap between teeth at π)
+      • gear 2 : tooth tip at angle 0  → phase = pitch/2      (tooth at 0 again)
+      • gear k : alternates based on contact side
+
+    The sign flip from the negative GearJoint ratio means driven gears rotate
+    opposite to the driver, so the angular offset between meshes propagates
+    correctly at run-time.  The static phases here just set t=0 alignment.
+
+    Returns a list of phase offsets (radians) to *add* to body.angle.
     """
-    phases = [0.0]
-    for i in range(1, len(num_teeth)):
-        pitch_i = (2.0 * math.pi) / num_teeth[i]
-        # Put a root gap at π: first tooth sits at π + pitch/2
-        phases.append(math.pi + pitch_i * 0.5)
+    phases = []
+    for i, n in enumerate(num_teeth):
+        pitch = (2.0 * math.pi) / n
+        if i == 0:
+            # First gear: align a tooth tip to angle 0 (right, contact side).
+            # tooth k centred at phase + k*pitch; for k=0 centred at phase=0.
+            phases.append(0.0)
+        else:
+            # Driven gear: align a root gap (valley between teeth) to angle π
+            # (left side, where the previous gear's tooth presses in).
+            # A valley sits halfway between tooth centres → phase = π + pitch/2.
+            phases.append(math.pi + pitch * 0.5)
     return phases

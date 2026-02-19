@@ -132,9 +132,11 @@ class GearTrainRig(Rig):
             self._add_spec('pivot', gear, None, h, pivot=(cx, cy_))
 
         # ── GearJoint between each adjacent pair ─────────────────────────────
-        # Use integer tooth-count ratio for exact visual–physics agreement.
+        # Meshing gears counter-rotate, so ratio must be negative:
+        #   pymunk constraint: a.angle - b.angle * ratio = phase
+        #   with ratio = -N_a/N_b, spinning a CCW spins b CW ✓
         for i in range(len(radii) - 1):
-            ratio = self.num_teeth[i] / self.num_teeth[i + 1]
+            ratio = -(self.num_teeth[i] / self.num_teeth[i + 1])
             h = JointHandle()
             self._add_spec(
                 'gear',
