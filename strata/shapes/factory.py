@@ -316,9 +316,9 @@ class Sprite:
         if node_radius <= 0:
             # min spacing between adjacent perimeter nodes
             min_gap = min(cell_dx, cell_dy)
-            # slightly larger than half the gap → overlap (self-collision
-            # is prevented by ShapeFilter.group, so overlap is fine)
-            node_radius = min_gap * 0.55
+            # Just large enough that adjacent circles touch, without
+            # protruding far beyond the visual polygon.
+            node_radius = min_gap * 0.35
 
         nodes: list[pymunk.Body] = []
         for r in range(rows):
@@ -402,21 +402,14 @@ class Sprite:
             shape.friction = 0.8
             surface_shapes.append(shape)
 
-        # Compute rest area from raw node positions (physical mesh area).
-        raw_verts = [(nodes[idx].position.x - x, nodes[idx].position.y - y)
-                     for idx in surface_indices]
-        rest_area = _shoelace_area(raw_verts)
-
         # Perimeter vertices for visual mesh (local coords relative to centre).
-        # Push each vertex outward by node_radius so the drawn polygon
-        # matches the actual collision boundary (pymunk.Circle radius).
         perimeter_verts = []
-        for lx, ly in raw_verts:
-            d = math.hypot(lx, ly)
-            if d > 1e-9:
-                lx += lx / d * node_radius
-                ly += ly / d * node_radius
-            perimeter_verts.append((lx, ly))
+        for idx in surface_indices:
+            bx, by = nodes[idx].position
+            perimeter_verts.append((bx - x, by - y))
+
+        # Compute rest area from perimeter polygon (for pressure forces)
+        rest_area = _shoelace_area(perimeter_verts)
 
         entity = Entity()
         entity.add_component(Transform(x=x, y=y))
@@ -504,7 +497,9 @@ class Sprite:
         # Auto-calculate node_radius to seal perimeter gaps if not explicit
         if node_radius <= 0:
             outer_arc = 2.0 * math.pi * radius / segments
-            node_radius = outer_arc * 0.55
+            # Just large enough that adjacent circles touch, without
+            # protruding far beyond the visual polygon.
+            node_radius = outer_arc * 0.35
 
         # Centre node
         moment_centre = pymunk.moment_for_circle(node_mass, 0, node_radius)
@@ -601,21 +596,14 @@ class Sprite:
             shape.friction = 0.8
             surface_shapes.append(shape)
 
-        # Initial perimeter vertices (local coords relative to centre)
-        # Compute rest area from raw node positions (physical mesh area).
-        raw_verts = [(nodes[idx].position.x - x, nodes[idx].position.y - y)
-                     for idx in surface_indices]
-        rest_area = _shoelace_area(raw_verts)
-
-        # Push each vertex outward by node_radius so the drawn polygon
-        # matches the actual collision boundary (pymunk.Circle radius).
+        # Perimeter vertices for visual mesh (local coords relative to centre)
         perimeter_verts = []
-        for lx, ly in raw_verts:
-            d = math.hypot(lx, ly)
-            if d > 1e-9:
-                lx += lx / d * node_radius
-                ly += ly / d * node_radius
-            perimeter_verts.append((lx, ly))
+        for idx in surface_indices:
+            bx, by = nodes[idx].position
+            perimeter_verts.append((bx - x, by - y))
+
+        # Compute rest area from perimeter polygon (for pressure forces)
+        rest_area = _shoelace_area(perimeter_verts)
 
         entity = Entity()
         entity.add_component(Transform(x=x, y=y))
