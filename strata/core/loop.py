@@ -83,6 +83,14 @@ class Scene(World):
             phys = entity.get_component(_Physics)
             if phys is not None:
                 self._physics_system.register(phys, entity.id)
+                # P1-4: populate sync pairs for dynamic bodies.
+                if not phys.is_static and phys.body is not None:
+                    from strata.ecs.components import Transform
+                    transform = entity.get_component(Transform)
+                    if transform is not None:
+                        self._physics_system._sync_pairs.append(
+                            (phys.body, transform)
+                        )
         if self._soft_body_system is not None:
             soft = entity.get_component(_SoftBody)
             if soft is not None:

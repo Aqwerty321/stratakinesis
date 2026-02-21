@@ -6,7 +6,8 @@ from __future__ import annotations
 import math
 
 from strata.rigs.base import Rig, JointHandle
-from strata.rigs.gear_utils import gear_polygon, select_num_teeth, initial_tooth_phases, build_local_tooth_polygon
+from strata.rigs.gear_utils import select_num_teeth, initial_tooth_phases, build_local_tooth_polygon
+from strata.backend.array import xp
 from strata.shapes.factory import Sprite
 
 
@@ -116,6 +117,17 @@ class GearTrainRig(Rig):
             )
             for i in range(len(radii))
         ]
+        # P1-2: Also cache as numpy arrays for batch rotation in draw().
+        self._local_tooth_arr: list = [
+            xp.array(pts, dtype=xp.float64)
+            for pts in self._local_tooth_pts
+        ]
+
+        # Pre-compute darker outlines (avoid per-frame tuple creation).
+        self._outlines: list[tuple[int, int, int, int]] = [
+            (max(0, c[0] - 40), max(0, c[1] - 40), max(0, c[2] - 40), 255)
+            for c in self._colors
+        ]
 
         # ── gear centres: place left-to-right tangentially ───────────────────
         self.centres: list[tuple[float, float]] = [(x, y)]
@@ -186,6 +198,17 @@ class GearTrainRig(Rig):
         import pygame.gfxdraw
         from strata.ecs.components import Physics
 
+        # Micro-opt: hoist method refs + pre-compute hub radius.
+        _filled_polygon = pygame.gfxdraw.filled_polygon
+        _aapolygon = pygame.gfxdraw.aapolygon
+        _filled_circle = pygame.gfxdraw.filled_circle
+        _aacircle = pygame.gfxdraw.aacircle
+        _cos = math.cos
+        _sin = math.sin
+        hub_px = max(2, camera.scale_length(self.module * 0.8))
+        w2s = camera.world_to_screen
+        w2s_batch = camera.world_to_screen_batch
+
         for i, gear in enumerate(self.gears):
             phys: Physics | None = gear.get_component(Physics)
             if phys is None:
@@ -193,44 +216,32 @@ class GearTrainRig(Rig):
 
             body_angle = phys.body.angle         # rotation from physics
             cx, cy     = self.centres[i]
-            r          = self._radii[i]
-            n          = self.num_teeth[i]
             phase      = self._tooth_phases[i]
             base_color = self._colors[i]
 
-            # Tooth polygon in screen space — one cos/sin per gear (P1 cache)
+            # Tooth polygon in screen space — batch rotation + w2s (P1-2)
             raw_angle = body_angle + phase
-            cos_a = math.cos(raw_angle)
-            sin_a = math.sin(raw_angle)
-            pts = [
-                camera.world_to_screen(
-                    cx + lx * cos_a - ly * sin_a,
-                    cy + lx * sin_a + ly * cos_a,
-                )
-                for lx, ly in self._local_tooth_pts[i]
-            ]
+            cos_a = _cos(raw_angle)
+            sin_a = _sin(raw_angle)
+            local = self._local_tooth_arr[i]  # (72, 2) float64
+            rot = xp.array([[cos_a, -sin_a], [sin_a, cos_a]], dtype=xp.float64)
+            world = local @ rot.T
+            world[:, 0] += cx
+            world[:, 1] += cy
+            pts = w2s_batch(world).tolist()
 
             if len(pts) < 3:
                 continue
 
             # Body fill
-            pygame.gfxdraw.filled_polygon(surface, pts, base_color)
+            _filled_polygon(surface, pts, base_color)
 
-            # Subtly darker anti-aliased outline
-            r_out, g_out, b_out = base_color[0], base_color[1], base_color[2]
-            outline = (
-                max(0, r_out - 40),
-                max(0, g_out - 40),
-                max(0, b_out - 40),
-                255,
-            )
-            pygame.gfxdraw.aapolygon(surface, pts, outline)
+            # Pre-computed darker outline
+            outline = self._outlines[i]
+            _aapolygon(surface, pts, outline)
 
             # Hub circle (small filled circle at gear centre)
-            sx, sy   = camera.world_to_screen(cx, cy)
-            hub_px   = max(2, camera.scale_length(self.module * 0.8))
-            pygame.gfxdraw.filled_circle(surface, sx, sy, hub_px, outline)
-            pygame.gfxdraw.aacircle(surface, sx, sy, hub_px, outline)
-
-
+            sx, sy   = w2s(cx, cy)
+            _filled_circle(surface, sx, sy, hub_px, outline)
+            _aacircle(surface, sx, sy, hub_px, outline)
 

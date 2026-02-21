@@ -96,6 +96,12 @@ class SoftBodySystem(System):
 
         # P3: pre-allocate the position buffer once; reused every physics tick.
         soft._pos_buf = xp.empty((len(soft.nodes), 2), dtype=xp.float64)
+        # P0-2: pre-allocate velocity buffer + immutable mass array for
+        # vectorised COM correction in _post_substep_com_correct().
+        n = len(soft.nodes)
+        soft._vel_buf = xp.empty((n, 2), dtype=xp.float64)
+        soft._mass_buf = xp.array([b.mass for b in soft.nodes], dtype=xp.float64)
+        soft._total_mass = float(xp.sum(soft._mass_buf))
 
         for body in soft.nodes:
             space.add(body)
@@ -224,9 +230,9 @@ class SoftBodySystem(System):
             if not hasattr(soft, '_pos_buf') or soft._pos_buf.shape[0] != n:
                 soft._pos_buf = xp.empty((n, 2), dtype=xp.float64)
             pos = soft._pos_buf  # reuse; shape (n, 2), allocated in register()
-            for i, body in enumerate(soft.nodes):
-                pos[i, 0] = body.position.x
-                pos[i, 1] = body.position.y
+            # P0-5: bulk-assign from list of tuples — single C-boundary crossing
+            # instead of N individual __setitem__ calls.
+            pos[:] = [(b.position.x, b.position.y) for b in soft.nodes]
 
             # --- 1. NaN guard (vectorised) ---
             nan_mask = xp.isnan(pos[:, 0]) | xp.isnan(pos[:, 1])
@@ -257,9 +263,14 @@ class SoftBodySystem(System):
             surf_pos = pos[surf_idx]  # (S, 2) — surface node positions
             local = surf_pos - centroid[xp.newaxis, :]
             # P2: update in-place rather than reallocating a new list every tick.
+            # P0-4: single .tolist() C call replaces 2S individual float() calls.
+            local_list = local.tolist()
             verts = visual.vertices
             if len(verts) != S:
-                visual.vertices = [(0.0, 0.0)] * S
+                visual.vertices = [(row[0], row[1]) for row in local_list]
                 verts = visual.vertices
-            for i in range(S):
-                verts[i] = (float(local[i, 0]), float(local[i, 1]))
+            else:
+                for i in range(S):
+                    verts[i] = (local_list[i][0], local_list[i][1])
+            # Invalidate the cached numpy array so RenderSystem sees fresh data.
+            visual._verts_arr = None

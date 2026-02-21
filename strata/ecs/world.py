@@ -21,6 +21,8 @@ class World:
         # Kept in sync by _index_entity / _unindex_entity.
         self._component_index: dict[type, set[int]] = {}
         self._systems: list["System"] = []       # ordered by priority (ascending)
+        # P1-7: Query result cache — invalidated on entity add/remove.
+        self._query_cache: dict[tuple[type, ...], list[Entity]] = {}
 
     # ------------------------------------------------------------------
     # Index helpers
@@ -34,6 +36,7 @@ class World:
                 self._component_index[ct].add(entity.id)
             except KeyError:
                 self._component_index[ct] = {entity.id}
+        self._query_cache.clear()  # P1-7: invalidate
 
     def _unindex_entity(self, entity: Entity) -> None:
         """Remove entity from the id map and component index."""
@@ -42,6 +45,7 @@ class World:
             s = self._component_index.get(ct)
             if s:
                 s.discard(entity.id)
+        self._query_cache.clear()  # P1-7: invalidate
 
     # ------------------------------------------------------------------
     # Entity management
@@ -73,9 +77,15 @@ class World:
 
         Uses the inverted component index — O(|result|) rather than O(N)
         when the requested component types are not carried by every entity.
+        Results are cached per component-type tuple and invalidated on
+        entity add/remove (P1-7).
         """
         if not component_types:
             return list(self._entities)
+        # P1-7: check cache first.
+        cached = self._query_cache.get(component_types)
+        if cached is not None:
+            return cached
         # Collect the id-sets for each requested type, fall back to empty set
         # for unknown types.  Sort by size so the intersection starts small.
         sets = sorted(
@@ -84,14 +94,19 @@ class World:
         )
         # Fast-path: if any set is empty, no entity qualifies.
         if not sets[0]:
-            return []
-        common: set[int] = sets[0].copy()
-        for s in sets[1:]:
-            common &= s
-            if not common:
-                return []
-        byid = self._entity_by_id
-        return [byid[eid] for eid in common if eid in byid]
+            result: list[Entity] = []
+        else:
+            common: set[int] = sets[0].copy()
+            for s in sets[1:]:
+                common &= s
+                if not common:
+                    result = []
+                    break
+            else:
+                byid = self._entity_by_id
+                result = [byid[eid] for eid in common if eid in byid]
+        self._query_cache[component_types] = result
+        return result
 
     @property
     def entities(self) -> list[Entity]:

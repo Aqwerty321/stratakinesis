@@ -98,6 +98,11 @@ class Visual(Component):
         # Normalise to 4-tuple RGBA so RenderSystem never needs a len() check.
         if len(self.color) == 3:
             self.color = (self.color[0], self.color[1], self.color[2], 255)
+        # Cache vertices as a numpy array for batch-transform in RenderSystem.
+        self._verts_arr = None
+        if self.vertices:
+            from strata.backend.array import xp
+            self._verts_arr = xp.array(self.vertices, dtype=xp.float64)
         if self.outline is not None and len(self.outline) == 3:
             self.outline = (self.outline[0], self.outline[1], self.outline[2], 255)
 

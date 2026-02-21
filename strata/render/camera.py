@@ -7,6 +7,7 @@
 from __future__ import annotations
 import math
 
+from strata.backend.array import xp
 from strata.config import WORLD_WIDTH, WORLD_HEIGHT
 
 
@@ -73,6 +74,19 @@ class Camera:
         wx = (sx - self.offset_x) / self.scale - self._half_w
         wy = self._half_h - (sy - self.offset_y) / self.scale
         return wx, wy
+
+    def world_to_screen_batch(self, world_pts):
+        """Convert (N,2) world-space coords → (N,2) int32 screen coords.
+
+        Accepts any array-like (list-of-tuples, numpy/cupy array).
+        Returns an ``xp.ndarray`` of shape ``(N, 2)`` with dtype ``int32``.
+        Much faster than calling ``world_to_screen`` in a Python loop.
+        """
+        pts = xp.asarray(world_pts, dtype=xp.float64)
+        out = xp.empty_like(pts)
+        out[:, 0] = self.offset_x + (pts[:, 0] + self._half_w) * self.scale
+        out[:, 1] = self.offset_y + (self._half_h - pts[:, 1]) * self.scale
+        return out.astype(xp.int32)
 
     def scale_length(self, world_length: float) -> int:
         """Convert a world-unit length to screen pixels (for radii, etc.)."""

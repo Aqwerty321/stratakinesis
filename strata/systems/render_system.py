@@ -16,6 +16,7 @@ from strata.systems.base import System
 from strata.ecs.components import Visual, Transform, SoftBody
 from strata.ecs.world import World
 from strata.render.camera import Camera
+from strata.backend.array import xp
 from strata.config import WORLD_WIDTH, WORLD_HEIGHT
 
 
@@ -36,11 +37,6 @@ def _lerp_angle(prev: float, curr: float, alpha: float) -> float:
 
 class RenderSystem(System):
     """Clears the screen and draws every entity with Visual + Transform."""
-
-    def __init__(self) -> None:
-        # Pre-allocated screen-point buffer reused across all polygon draw calls.
-        # Avoids allocating a new list + N tuples every frame per entity.
-        self._pts_buffer: list[tuple[int, int]] = []
 
     def update(self, world: World, dt: float) -> None:
         # RenderSystem has nothing to do during physics steps.
@@ -143,14 +139,18 @@ class RenderSystem(System):
         cos_a = math.cos(ra)
         sin_a = math.sin(ra)
 
-        # Reuse the shared buffer — avoids a new list allocation per polygon.
-        buf = self._pts_buffer
-        buf.clear()
-        for lx, ly in visual.vertices:
-            rot_x = lx * cos_a - ly * sin_a
-            rot_y = lx * sin_a + ly * cos_a
-            sx, sy = camera.world_to_screen(rx + rot_x, ry + rot_y)
-            buf.append((sx, sy))
+        # P0-3: Batch rotation + world_to_screen via numpy.
+        verts = visual._verts_arr
+        if verts is None:
+            verts = xp.array(visual.vertices, dtype=xp.float64)
+            visual._verts_arr = verts
+        # Rotation matrix multiply: [cos -sin; sin cos] @ verts.T
+        rot = xp.array([[cos_a, -sin_a], [sin_a, cos_a]], dtype=xp.float64)
+        world = verts @ rot.T
+        world[:, 0] += rx
+        world[:, 1] += ry
+        screen = camera.world_to_screen_batch(world)  # (V, 2) int32
+        buf = screen.tolist()
 
         if len(buf) < 3:
             return
@@ -177,12 +177,16 @@ class RenderSystem(System):
         if not visual.vertices or len(visual.vertices) < 3:
             return
 
-        # Reuse the shared buffer — avoids a new list allocation per polygon.
-        buf = self._pts_buffer
-        buf.clear()
-        for lx, ly in visual.vertices:
-            sx, sy = camera.world_to_screen(rx + lx, ry + ly)
-            buf.append((sx, sy))
+        # P1-1: Batch world_to_screen via numpy (no rotation for soft bodies).
+        verts = visual._verts_arr
+        if verts is None:
+            verts = xp.array(visual.vertices, dtype=xp.float64)
+        # Offset to world position (centroid).
+        world = verts.copy()
+        world[:, 0] += rx
+        world[:, 1] += ry
+        screen = camera.world_to_screen_batch(world)  # (V, 2) int32
+        buf = screen.tolist()
 
         # Cull if entirely off-screen
         w, h = surface.get_size()
@@ -204,18 +208,41 @@ class RenderSystem(System):
         """Debug render: draw each node as a small circle and each spring as a line."""
         node_color = (100, 255, 100, 200)
         spring_color = (200, 200, 100, 140)
+        spring_rgb = spring_color[:3]
+        node_rgb = node_color[:3]
 
-        # Draw springs first (underneath nodes)
-        for spring in soft.springs:
-            a_pos = spring.a.position
-            b_pos = spring.b.position
-            ax, ay = camera.world_to_screen(a_pos.x, a_pos.y)
-            bx, by = camera.world_to_screen(b_pos.x, b_pos.y)
-            pygame.draw.line(surface, spring_color[:3], (ax, ay), (bx, by), 1)
+        # P1-5: Batch-transform all spring endpoints and nodes in two numpy calls.
+        n_springs = len(soft.springs)
+        n_nodes = len(soft.nodes)
+        if n_nodes == 0:
+            return
 
-        # Draw nodes
+        # Collect spring endpoints as (N_springs, 4) [ax, ay, bx, by]
+        if n_springs > 0:
+            endpoints = xp.empty((n_springs, 4), dtype=xp.float64)
+            for i, spring in enumerate(soft.springs):
+                ap = spring.a.position
+                bp = spring.b.position
+                endpoints[i, 0] = ap.x
+                endpoints[i, 1] = ap.y
+                endpoints[i, 2] = bp.x
+                endpoints[i, 3] = bp.y
+            a_screen = camera.world_to_screen_batch(endpoints[:, :2]).tolist()
+            b_screen = camera.world_to_screen_batch(endpoints[:, 2:]).tolist()
+            draw_line = pygame.draw.line
+            for i in range(n_springs):
+                draw_line(surface, spring_rgb, a_screen[i], b_screen[i], 1)
+
+        # Batch-transform node positions
+        node_pos = xp.empty((n_nodes, 2), dtype=xp.float64)
+        for i, body in enumerate(soft.nodes):
+            node_pos[i, 0] = body.position.x
+            node_pos[i, 1] = body.position.y
+        node_screen = camera.world_to_screen_batch(node_pos).tolist()
+
         r = max(2, camera.scale_length(soft.node_radius))
-        for body in soft.nodes:
-            cx, cy = camera.world_to_screen(body.position.x, body.position.y)
-            pygame.gfxdraw.filled_circle(surface, cx, cy, r, node_color)
-            pygame.gfxdraw.aacircle(surface, cx, cy, r, node_color[:3])
+        filled_circle = pygame.gfxdraw.filled_circle
+        aacircle = pygame.gfxdraw.aacircle
+        for cx, cy in node_screen:
+            filled_circle(surface, cx, cy, r, node_color)
+            aacircle(surface, cx, cy, r, node_rgb)

@@ -76,6 +76,14 @@ class PhysicsSystem(System):
         # Lazily created on first access.
         self._static_body: pymunk.Body | None = None
 
+        # P1-3: Pre-filtered list of (body, linear_damp, angular_damp) for
+        # dynamic bodies with damping < 1.0.  Avoids per-frame ECS query.
+        self._damped_bodies: list[tuple[pymunk.Body, float, float]] = []
+
+        # P1-4: Pre-built list of (body, transform) for dynamic entities.
+        # Avoids per-frame ECS query + get_component in _sync_transforms.
+        self._sync_pairs: list[tuple[pymunk.Body, Transform]] = []
+
         # Register a default collision handler to capture all pair events.
         # pymunk 7 API: space.on_collision(None, None, begin=fn, separate=fn)
         # None, None = wildcard (any collision type pair).
@@ -117,6 +125,13 @@ class PhysicsSystem(System):
             self.space.add(physics.shape)
             if entity_id >= 0:
                 self._shape_to_entity[physics.shape] = entity_id
+
+        # P1-3: index damped dynamic bodies once at registration.
+        if not physics.is_static and physics.body is not None:
+            if physics.linear_damping < 1.0 or physics.angular_damping < 1.0:
+                self._damped_bodies.append(
+                    (physics.body, physics.linear_damping, physics.angular_damping)
+                )
 
     # ------------------------------------------------------------------
     # Collision event draining (called by Game.run() / Game.step())
@@ -182,35 +197,42 @@ class PhysicsSystem(System):
         self._sync_transforms(world)
 
     def _apply_body_damping(self, world: World) -> None:
-        """Apply per-body linear and angular damping once per fixed step."""
-        for entity in world.get_entities_with(Physics):
-            phys: Physics = entity.get_component(Physics)
-            if phys.is_static:
-                continue
-            if phys.linear_damping < 1.0:
-                v = phys.body.velocity
-                d = phys.linear_damping
-                phys.body.velocity = (v.x * d, v.y * d)
-            if phys.angular_damping < 1.0:
-                phys.body.angular_velocity *= phys.angular_damping
+        """Apply per-body linear and angular damping once per fixed step.
+
+        P1-3: Iterates the pre-built _damped_bodies list instead of doing
+        a full ECS query + component lookup + is_static filter every frame.
+        """
+        for body, ld, ad in self._damped_bodies:
+            if ld < 1.0:
+                v = body.velocity
+                body.velocity = (v.x * ld, v.y * ld)
+            if ad < 1.0:
+                body.angular_velocity *= ad
 
     def _sync_transforms(self, world: World) -> None:
-        """Copy body position/angle back into Transform components."""
-        for entity in world.get_entities_with(Physics, Transform):
-            physics: Physics = entity.get_component(Physics)
-            transform: Transform = entity.get_component(Transform)
+        """Copy body position/angle back into Transform components.
 
-            if physics.is_static:
-                # Static bodies do not move; no sync needed.
-                continue
-
-            body: pymunk.Body = physics.body
-
-            # Snapshot current state before overwriting (used for interpolation)
-            transform.prev_x = transform.x
-            transform.prev_y = transform.y
-            transform.prev_angle = transform.angle
-
-            transform.x = body.position.x
-            transform.y = body.position.y
-            transform.angle = body.angle
+        P1-4: Uses the pre-built _sync_pairs list when available, falling
+        back to the ECS query for entities registered before the optimisation.
+        """
+        if self._sync_pairs:
+            for body, transform in self._sync_pairs:
+                transform.prev_x = transform.x
+                transform.prev_y = transform.y
+                transform.prev_angle = transform.angle
+                transform.x = body.position.x
+                transform.y = body.position.y
+                transform.angle = body.angle
+        else:
+            for entity in world.get_entities_with(Physics, Transform):
+                physics: Physics = entity.get_component(Physics)
+                transform: Transform = entity.get_component(Transform)
+                if physics.is_static:
+                    continue
+                body: pymunk.Body = physics.body
+                transform.prev_x = transform.x
+                transform.prev_y = transform.y
+                transform.prev_angle = transform.angle
+                transform.x = body.position.x
+                transform.y = body.position.y
+                transform.angle = body.angle
