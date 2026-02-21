@@ -22,7 +22,7 @@ agree, so pymunk skips those pairs entirely.
 import math
 import itertools
 import pygame
-from strata import Game, Sprite, CollisionEvent
+from strata import Game, Sprite, Mesh, CollisionEvent
 from strata.ecs.components import Physics
 
 
@@ -30,31 +30,10 @@ from strata.ecs.components import Physics
 # Helpers
 # ---------------------------------------------------------------------------
 
-def rotated_rect_verts(
-    width: float, height: float, angle_deg: float
-) -> list[tuple[float, float]]:
-    """4 CCW vertices of a (width × height) rect pre-rotated by angle_deg."""
-    hw, hh = width / 2.0, height / 2.0
-    a = math.radians(angle_deg)
-    ca, sa = math.cos(a), math.sin(a)
-    corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
-    return [(x * ca - y * sa, x * sa + y * ca) for x, y in corners]
-
-
-def equilateral_triangle(r: float) -> list[tuple[float, float]]:
-    return [
-        (r * math.cos(math.radians(90 + 120 * i)),
-         r * math.sin(math.radians(90 + 120 * i)))
-        for i in range(3)
-    ]
-
-
-def hexagon(r: float) -> list[tuple[float, float]]:
-    return [
-        (r * math.cos(math.radians(60 * i)),
-         r * math.sin(math.radians(60 * i)))
-        for i in range(6)
-    ]
+# Pre-computed geometry templates — trig runs once, cached for all spawns.
+_TRIANGLE_VERTS = Mesh.triangle(0.45)
+_DIAMOND_VERTS  = Mesh.diamond(0.9, 1.2)
+_HEXAGON_VERTS  = Mesh.ngon(6, 0.38)
 
 
 # Shape catalogue — cycles on each auto-spawn / burst
@@ -73,13 +52,12 @@ def make_shape(x: float, y: float):
     if kind == "circle":
         return Sprite.circle(radius=0.38, x=x, y=y, density=1.2, color=color)
     if kind == "triangle":
-        return Sprite.polygon(equilateral_triangle(0.45), x=x, y=y,
+        return Sprite.polygon(_TRIANGLE_VERTS, x=x, y=y,
                               density=1.5, color=color)
     if kind == "diamond":
-        verts = [(0.0, 0.6), (-0.45, 0.0), (0.0, -0.6), (0.45, 0.0)]
-        return Sprite.polygon(verts, x=x, y=y, density=1.0, color=color)
+        return Sprite.polygon(_DIAMOND_VERTS, x=x, y=y, density=1.0, color=color)
     # hexagon
-    return Sprite.polygon(hexagon(0.38), x=x, y=y, density=1.0, color=color)
+    return Sprite.polygon(_HEXAGON_VERTS, x=x, y=y, density=1.0, color=color)
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +96,8 @@ wall_r = add_solid(Sprite.rect(width=0.35, height=10.0, x= 7.9, y=0.0,  static=T
 
 # --- V-shaped ramps converging toward centre bottom ---
 # Left ramp: tilts ~28° downward toward x=0
-lrv = rotated_rect_verts(6.0, 0.35, -28.0)
-rrv = rotated_rect_verts(6.0, 0.35,  28.0)
+lrv = Mesh.rotated_rect(6.0, 0.35, -28.0)
+rrv = Mesh.rotated_rect(6.0, 0.35,  28.0)
 left_ramp  = add_solid(Sprite.polygon(lrv, x=-3.5, y=-1.0, static=True, color=ramp_color))
 right_ramp = add_solid(Sprite.polygon(rrv, x= 3.5, y=-1.0, static=True, color=ramp_color))
 
@@ -128,7 +106,7 @@ shelf_l = add_solid(Sprite.rect(width=2.2, height=0.25, x=-6.5, y=1.8, static=Tr
 shelf_r = add_solid(Sprite.rect(width=2.2, height=0.25, x= 6.5, y=1.8, static=True, color=shelf_color))
 
 # --- Ghost ledge — only ghost-layer objects land here ---
-ghost_ledge_verts = rotated_rect_verts(3.2, 0.28, 0.0)
+ghost_ledge_verts = Mesh.rotated_rect(3.2, 0.28, 0.0)
 ghost_ledge = Sprite.polygon(ghost_ledge_verts, x=0.0, y=0.6, static=True,
                               color=(160, 160, 255, 90))
 ghost_ledge.get_component(Physics).collision_layer = GHOST_LAYER

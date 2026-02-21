@@ -16,23 +16,8 @@ ESC     : quit
 import itertools
 import math
 import pygame
-from strata import Game, Sprite, SoftBody, CollisionEvent
+from strata import Game, Sprite, Mesh, SoftBody, CollisionEvent
 from strata.ecs.components import Physics
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def rotated_rect_verts(
-    width: float, height: float, angle_deg: float
-) -> list[tuple[float, float]]:
-    """4 CCW vertices of a (width × height) rect pre-rotated by angle_deg."""
-    hw, hh = width / 2.0, height / 2.0
-    a = math.radians(angle_deg)
-    ca, sa = math.cos(a), math.sin(a)
-    corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
-    return [(x * ca - y * sa, x * sa + y * ca) for x, y in corners]
 
 
 # ---------------------------------------------------------------------------
@@ -113,8 +98,8 @@ wall_l = Sprite.rect(width=0.35, height=10.0, x=-7.9,  y=0.0,  static=True, colo
 wall_r = Sprite.rect(width=0.35, height=10.0, x= 7.9,  y=0.0,  static=True, color=arena_color)
 
 # V-shaped ramps converging toward centre bottom
-lrv = rotated_rect_verts(5.5, 0.35, -25.0)
-rrv = rotated_rect_verts(5.5, 0.35,  25.0)
+lrv = Mesh.rotated_rect(5.5, 0.35, -25.0)
+rrv = Mesh.rotated_rect(5.5, 0.35,  25.0)
 left_ramp  = Sprite.polygon(lrv, x=-3.2, y=-1.2, static=True, color=ramp_color)
 right_ramp = Sprite.polygon(rrv, x= 3.2, y=-1.2, static=True, color=ramp_color)
 

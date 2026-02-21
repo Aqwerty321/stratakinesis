@@ -1,8 +1,9 @@
 # strata — Deterministic, rigging-first 2D engine core.
-# Public surface: Game, Sprite, InputBuffer, StampedEvent, CollisionEvent,
-#                 SoftBody, and all Rig types.
+# Public surface: Game, Sprite, Mesh, InputBuffer, StampedEvent,
+#                 CollisionEvent, SoftBody, and all Rig types.
 from strata.core.loop import Game
 from strata.shapes.factory import Sprite
+from strata.shapes.mesh import Mesh
 from strata.core.input_buffer import InputBuffer, StampedEvent
 from strata.systems.physics_system import CollisionEvent
 from strata.ecs.components import SoftBody
@@ -13,7 +14,8 @@ from strata.rigs import (
 )
 
 __all__ = [
-    "Game", "Sprite", "InputBuffer", "StampedEvent", "CollisionEvent",
+    "Game", "Sprite", "Mesh",
+    "InputBuffer", "StampedEvent", "CollisionEvent",
     "SoftBody",
     "Rig", "JointHandle",
     "HingeMotorRig", "ChainRig", "RopeRig",

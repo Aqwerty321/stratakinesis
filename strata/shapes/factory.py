@@ -12,6 +12,7 @@ import pymunk
 
 from strata.ecs.entity import Entity
 from strata.ecs.components import Transform, Physics, Visual, SoftBody
+from strata.shapes.mesh import Mesh
 
 
 # Number of segments used to approximate a circle's visual polygon.
@@ -25,19 +26,20 @@ _DEFAULT_OUTLINE = (255, 255, 255, 160)
 
 
 def _circle_vertices(radius: float, segments: int = _CIRCLE_SEGMENTS) -> list[tuple[float, float]]:
-    """Return local-space vertices for a circle polygon approximation."""
-    verts = []
-    for i in range(segments):
-        angle = 2.0 * math.pi * i / segments
-        verts.append((radius * math.cos(angle), radius * math.sin(angle)))
-    return verts
+    """Return local-space vertices for a circle polygon approximation.
+
+    Delegates to Mesh.circle() which uses pre-computed unit templates
+    and LRU caching — no trig after the first call with these params.
+    """
+    return Mesh.circle(radius, segments)
 
 
 def _rect_vertices(width: float, height: float) -> list[tuple[float, float]]:
-    """Return local-space vertices for an axis-aligned rectangle (CCW)."""
-    hw = width / 2.0
-    hh = height / 2.0
-    return [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+    """Return local-space vertices for an axis-aligned rectangle (CCW).
+
+    Delegates to Mesh.rect() with LRU caching.
+    """
+    return Mesh.rect(width, height)
 
 
 def _shoelace_area(vertices: list[tuple[float, float]]) -> float:
