@@ -145,9 +145,15 @@ class Game:
     vsync       : enable vsync.  Defaults to False on WSLg (where it causes
                   extra compositor latency), True on real displays.
     show_overlay: show FPS/physics HUD at startup. Toggle live with F3.
-    physics_substeps : number of sub-steps per physics tick (default 1).
+    physics_substeps : base number of sub-steps per physics tick (default 1).
                        Soft bodies with stiff springs need >=4 to stay
-                       numerically stable at 60 Hz.
+                       numerically stable at 60 Hz.  With CCD enabled the
+                       actual substep count may be higher to prevent tunneling.
+    physics_iterations : pymunk solver iterations per step (default 20).
+    physics_slop       : collision slop — allowed overlap before correction
+                         (default 0.02 world units).
+    physics_ccd        : enable swept CCD + adaptive substeps (default True).
+    physics_max_substeps : hard cap on adaptive substeps (default 32).
     """
 
     def __init__(
@@ -159,6 +165,10 @@ class Game:
         vsync: bool = _DEFAULT_VSYNC,
         show_overlay: bool = False,
         physics_substeps: int = 1,
+        physics_iterations: int = 20,
+        physics_slop: float = 0.02,
+        physics_ccd: bool = True,
+        physics_max_substeps: int = 32,
     ) -> None:
         pygame.init()
 
@@ -189,7 +199,14 @@ class Game:
         self.camera: Camera = Camera(window_size)
 
         # Core systems wired in priority order
-        self.physics: PhysicsSystem = PhysicsSystem(gravity=gravity, substeps=physics_substeps)
+        self.physics: PhysicsSystem = PhysicsSystem(
+            gravity=gravity,
+            substeps=physics_substeps,
+            iterations=physics_iterations,
+            collision_slop=physics_slop,
+            ccd=physics_ccd,
+            max_substeps=physics_max_substeps,
+        )
         self.soft_body: SoftBodySystem = SoftBodySystem(physics_system=self.physics)
         self._render: RenderSystem = RenderSystem()
         self._binding: BindingSystem = BindingSystem()
@@ -355,6 +372,7 @@ class Game:
         gravity = self.physics.space.gravity
         entity_count = len(self.scene.entities)
         body_count = len(self.physics.space.bodies)
+        ccd_str = f"on ({self.physics.substeps} sub)" if self.physics._ccd_enabled else "off"
         platform = "WSLg" if _ON_WSL else "native"
         vsync_str = "on" if self._vsync else f"off (cap {self._max_fps or '∞'})"
 
@@ -363,6 +381,7 @@ class Game:
             f"entities   {entity_count}",
             f"bodies     {body_count}",
             f"phys steps {physics_steps}/frame",
+            f"CCD        {ccd_str}",
             f"gravity    ({gravity.x:.2f}, {gravity.y:.2f})",
             f"vsync      {vsync_str}",
             f"platform   {platform}",

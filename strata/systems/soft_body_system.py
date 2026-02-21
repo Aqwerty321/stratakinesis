@@ -121,6 +121,10 @@ class SoftBodySystem(System):
         self._registered.add(entity_id)
         self._soft_bodies.append(soft)
 
+        # CCD: mark soft-body nodes as excluded from swept CCD.
+        # They already have _MAX_SPEED cap + per-substep damping.
+        self._physics.mark_soft_body_nodes(soft.nodes)
+
     def unregister(self, soft: SoftBody, entity_id: int = -1) -> None:
         """Remove all bodies, springs, and surface shapes from the pymunk space."""
         space = self._physics.space
