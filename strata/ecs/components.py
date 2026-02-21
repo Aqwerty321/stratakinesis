@@ -80,14 +80,26 @@ class Visual(Component):
     (relative to the entity's Transform origin).  They are cached at creation
     time and never rebuilt per-frame; RenderSystem applies Transform to them.
 
-    `color`   — fill colour as (R, G, B[, A]) tuple.
+    `color`   — fill colour as (R, G, B) or (R, G, B, A) tuple.
+                Always stored internally as a 4-tuple after construction.
     `outline` — outline colour; None means no outline.
+                Always stored internally as a 4-tuple (or None) after construction.
+    `hidden`  — when True, RenderSystem skips this entity.  Use for entities
+                whose visuals are fully managed by a rig's own draw() call.
     """
     shape_type: str = "polygon"   # "circle" | "polygon"
     radius: float = 0.0           # used only when shape_type == "circle"
     vertices: list[tuple[float, float]] = field(default_factory=list)
     color: tuple[int, ...] = (100, 180, 255, 255)
     outline: tuple[int, ...] | None = (255, 255, 255, 200)
+    hidden: bool = False
+
+    def __post_init__(self) -> None:
+        # Normalise to 4-tuple RGBA so RenderSystem never needs a len() check.
+        if len(self.color) == 3:
+            self.color = (self.color[0], self.color[1], self.color[2], 255)
+        if self.outline is not None and len(self.outline) == 3:
+            self.outline = (self.outline[0], self.outline[1], self.outline[2], 255)
 
 
 @dataclass

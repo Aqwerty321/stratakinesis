@@ -559,11 +559,11 @@ class TestPressureForces:
             assert abs(ay - by) < 0.05
 
     def test_velocity_damping_reduces_speed(self, physics, soft_body_sys):
-        """Velocity damping should reduce node velocities via velocity_func.
+        """Velocity damping should reduce node velocities via the post-substep hook.
 
-        The velocity_func runs on each space.step(), applying per-substep
-        damping and speed clamping.  We step the space once so the damping
-        takes effect, then verify velocities dropped.
+        Damping is applied in _post_substep_com_correct(), which PhysicsSystem
+        calls after each substep.  In unit tests that call space.step() directly
+        we invoke the hook manually to verify it reduces speed as expected.
         """
         e = Sprite.soft_rect(
             cols=2, rows=2, width=1.0, height=1.0, x=0.0, y=0.0,
@@ -581,13 +581,14 @@ class TestPressureForces:
         world = World()
         world.add_entity(e)
 
-        # Step the space so velocity_func fires (it runs on space.step)
+        # Step the space then fire the post-substep hook (normally called by
+        # PhysicsSystem.update(); here we invoke it directly to test damping).
         physics.space.step(1 / 60)
+        soft_body_sys._post_substep_com_correct(1 / 60)
         soft_body_sys.update(world, 1 / 60)
 
-        # After one step, velocity_func applied damping ≈ 0.9.
-        # Spring forces also alter velocity, but the initial 10 m/s should
-        # have been reduced by the 0.9 multiplier.
+        # After damping (factor ≈ 0.9), velocities should have been reduced.
+        # COM correction also zeroes lateral drift, so x may collapse to 0.
         for body in sb.nodes:
             assert abs(body.velocity.x) < 10.0
             assert abs(body.velocity.y) < 5.0

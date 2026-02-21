@@ -115,6 +115,71 @@ def gear_polygon(
     return [camera.world_to_screen(cx + lx, cy + ly) for (lx, ly) in local_pts]
 
 
+def build_local_tooth_polygon(
+    pitch_radius: float,
+    num_teeth: int,
+    tooth_frac: float = 0.46,
+    tip_frac: float = 0.26,
+    module: float | None = None,
+    fillet_frac: float = 0.06,
+) -> list[tuple[float, float]]:
+    """Return the gear tooth polygon in **local space at angle 0**.
+
+    All trigonometry is done here, once at rig construction.  At draw time
+    the cached points are rotated by a single ``cos``/``sin`` pair per gear.
+
+    Parameters
+    ----------
+    pitch_radius : pitch circle radius (world units).
+    num_teeth    : integer tooth count.
+    tooth_frac   : fraction of angular pitch for tooth width at root.
+    tip_frac     : fraction of angular pitch for tooth tip width.
+    module       : gear module; defaults to ``2 * pitch_radius / num_teeth``.
+    fillet_frac  : angular smoothing at root transitions.
+
+    Returns
+    -------
+    List of ``(lx, ly)`` world-unit float pairs in local gear space
+    (gear centre at origin, no rotation applied).
+    """
+    if module is None:
+        module = 2.0 * pitch_radius / num_teeth
+
+    addendum = module
+    dedendum = 1.25 * module
+    r_tip  = pitch_radius + addendum
+    r_root = pitch_radius - dedendum
+
+    pitch_angle = (2.0 * math.pi) / num_teeth
+    hw_tooth = tooth_frac * pitch_angle * 0.5
+    hw_tip   = tip_frac   * pitch_angle * 0.5
+    fillet   = fillet_frac * pitch_angle
+
+    local_pts: list[tuple[float, float]] = []
+    for k in range(num_teeth):
+        tc = k * pitch_angle   # tooth centre angle at identity rotation
+
+        a = tc - hw_tooth - fillet
+        local_pts.append((r_root * math.cos(a), r_root * math.sin(a)))
+
+        a = tc - hw_tooth
+        local_pts.append((r_root * math.cos(a), r_root * math.sin(a)))
+
+        a = tc - hw_tip
+        local_pts.append((r_tip  * math.cos(a), r_tip  * math.sin(a)))
+
+        a = tc + hw_tip
+        local_pts.append((r_tip  * math.cos(a), r_tip  * math.sin(a)))
+
+        a = tc + hw_tooth
+        local_pts.append((r_root * math.cos(a), r_root * math.sin(a)))
+
+        a = tc + hw_tooth + fillet
+        local_pts.append((r_root * math.cos(a), r_root * math.sin(a)))
+
+    return local_pts
+
+
 def select_num_teeth(
     radii: list[float],
     teeth_per_unit: float = 14.0,

@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 
 from strata.rigs.base import Rig, JointHandle
-from strata.rigs.gear_utils import gear_polygon, select_num_teeth, initial_tooth_phases
+from strata.rigs.gear_utils import gear_polygon, select_num_teeth, initial_tooth_phases, build_local_tooth_polygon
 from strata.shapes.factory import Sprite
 
 
@@ -107,6 +107,16 @@ class GearTrainRig(Rig):
         self._tooth_phases  = initial_tooth_phases(self.num_teeth, lock_frac)
         self._colors        = [palette[i % len(palette)] for i in range(len(radii))]
 
+        # ── pre-build local-space tooth polygons (P1 trig cache) ─────────────
+        # All sin/cos computed once here; draw() applies a single rotation per gear.
+        self._local_tooth_pts: list[list[tuple[float, float]]] = [
+            build_local_tooth_polygon(
+                radii[i], self.num_teeth[i],
+                tooth_frac, tip_frac, self.module,
+            )
+            for i in range(len(radii))
+        ]
+
         # ── gear centres: place left-to-right tangentially ───────────────────
         self.centres: list[tuple[float, float]] = [(x, y)]
         for i in range(1, len(radii)):
@@ -188,14 +198,17 @@ class GearTrainRig(Rig):
             phase      = self._tooth_phases[i]
             base_color = self._colors[i]
 
-            # Tooth polygon in screen space
-            pts = gear_polygon(
-                cx, cy,
-                body_angle + phase,
-                r, n, camera,
-                tooth_frac=self.tooth_frac,
-                tip_frac=self.tip_frac,
-            )
+            # Tooth polygon in screen space — one cos/sin per gear (P1 cache)
+            raw_angle = body_angle + phase
+            cos_a = math.cos(raw_angle)
+            sin_a = math.sin(raw_angle)
+            pts = [
+                camera.world_to_screen(
+                    cx + lx * cos_a - ly * sin_a,
+                    cy + lx * sin_a + ly * cos_a,
+                )
+                for lx, ly in self._local_tooth_pts[i]
+            ]
 
             if len(pts) < 3:
                 continue

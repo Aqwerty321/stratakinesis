@@ -30,6 +30,10 @@ class Camera:
         self.scale: float = 1.0
         self.offset_x: float = 0.0
         self.offset_y: float = 0.0
+        # Cached half-extents — avoids recomputing WORLD_WIDTH/2 on every
+        # world_to_screen / screen_to_world call (updated in resize()).
+        self._half_w: float = 0.0
+        self._half_h: float = 0.0
         self.resize(window_size)
 
     # ------------------------------------------------------------------
@@ -50,6 +54,9 @@ class Camera:
         world_screen_h = WORLD_HEIGHT * self.scale
         self.offset_x = (self.window_width - world_screen_w) / 2.0
         self.offset_y = (self.window_height - world_screen_h) / 2.0
+        # Cache half-extents used in every coordinate conversion.
+        self._half_w = WORLD_WIDTH / 2.0
+        self._half_h = WORLD_HEIGHT / 2.0
 
     # ------------------------------------------------------------------
     # Coordinate conversions
@@ -57,17 +64,14 @@ class Camera:
 
     def world_to_screen(self, wx: float, wy: float) -> tuple[int, int]:
         """Convert a world-space position to integer screen-pixel coordinates."""
-        # World centre is at (WORLD_WIDTH/2, WORLD_HEIGHT/2) from tile origin,
-        # but we define world origin as the centre of the viewport.
-        sx = self.offset_x + (wx + WORLD_WIDTH / 2.0) * self.scale
-        # Flip Y: world +Y is up, screen +Y is down
-        sy = self.offset_y + (WORLD_HEIGHT / 2.0 - wy) * self.scale
+        sx = self.offset_x + (wx + self._half_w) * self.scale
+        sy = self.offset_y + (self._half_h - wy) * self.scale
         return int(sx), int(sy)
 
     def screen_to_world(self, sx: int, sy: int) -> tuple[float, float]:
         """Convert screen-pixel coordinates to world-space position."""
-        wx = (sx - self.offset_x) / self.scale - WORLD_WIDTH / 2.0
-        wy = WORLD_HEIGHT / 2.0 - (sy - self.offset_y) / self.scale
+        wx = (sx - self.offset_x) / self.scale - self._half_w
+        wy = self._half_h - (sy - self.offset_y) / self.scale
         return wx, wy
 
     def scale_length(self, world_length: float) -> int:

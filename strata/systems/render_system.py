@@ -37,6 +37,11 @@ def _lerp_angle(prev: float, curr: float, alpha: float) -> float:
 class RenderSystem(System):
     """Clears the screen and draws every entity with Visual + Transform."""
 
+    def __init__(self) -> None:
+        # Pre-allocated screen-point buffer reused across all polygon draw calls.
+        # Avoids allocating a new list + N tuples every frame per entity.
+        self._pts_buffer: list[tuple[int, int]] = []
+
     def update(self, world: World, dt: float) -> None:
         # RenderSystem has nothing to do during physics steps.
         pass
@@ -65,6 +70,8 @@ class RenderSystem(System):
         # Draw each entity
         for entity in world.get_entities_with(Visual, Transform):
             visual: Visual = entity.get_component(Visual)
+            if visual.hidden:
+                continue
             transform: Transform = entity.get_component(Transform)
             self._draw_entity(surface, camera, visual, transform, alpha, entity)
 
@@ -136,29 +143,27 @@ class RenderSystem(System):
         cos_a = math.cos(ra)
         sin_a = math.sin(ra)
 
-        # Transform cached local vertices → screen pixels
-        screen_pts: list[tuple[int, int]] = []
+        # Reuse the shared buffer — avoids a new list allocation per polygon.
+        buf = self._pts_buffer
+        buf.clear()
         for lx, ly in visual.vertices:
-            # Rotate around local origin
             rot_x = lx * cos_a - ly * sin_a
             rot_y = lx * sin_a + ly * cos_a
-            # Translate to world position then convert to screen
             sx, sy = camera.world_to_screen(rx + rot_x, ry + rot_y)
-            screen_pts.append((sx, sy))
+            buf.append((sx, sy))
 
-        if len(screen_pts) < 3:
+        if len(buf) < 3:
             return
 
         # Cull if all vertices are outside the surface bounds
         w, h = surface.get_size()
-        if all(sx < 0 or sx > w or sy < 0 or sy > h for sx, sy in screen_pts):
+        if all(sx < 0 or sx > w or sy < 0 or sy > h for sx, sy in buf):
             return
 
-        color = visual.color[:4] if len(visual.color) == 4 else (*visual.color, 255)
-        pygame.gfxdraw.filled_polygon(surface, screen_pts, color)
+        # color and outline are guaranteed 4-tuples (normalised in Visual.__post_init__)
+        pygame.gfxdraw.filled_polygon(surface, buf, visual.color)
         if visual.outline is not None:
-            outline = visual.outline[:4] if len(visual.outline) == 4 else (*visual.outline, 255)
-            pygame.gfxdraw.aapolygon(surface, screen_pts, outline)
+            pygame.gfxdraw.aapolygon(surface, buf, visual.outline)
 
     def _draw_soft_polygon(
         self,
@@ -172,21 +177,21 @@ class RenderSystem(System):
         if not visual.vertices or len(visual.vertices) < 3:
             return
 
-        screen_pts: list[tuple[int, int]] = []
+        # Reuse the shared buffer — avoids a new list allocation per polygon.
+        buf = self._pts_buffer
+        buf.clear()
         for lx, ly in visual.vertices:
             sx, sy = camera.world_to_screen(rx + lx, ry + ly)
-            screen_pts.append((sx, sy))
+            buf.append((sx, sy))
 
         # Cull if entirely off-screen
         w, h = surface.get_size()
-        if all(sx < 0 or sx > w or sy < 0 or sy > h for sx, sy in screen_pts):
+        if all(sx < 0 or sx > w or sy < 0 or sy > h for sx, sy in buf):
             return
 
-        color = visual.color[:4] if len(visual.color) == 4 else (*visual.color, 255)
-        pygame.gfxdraw.filled_polygon(surface, screen_pts, color)
+        pygame.gfxdraw.filled_polygon(surface, buf, visual.color)
         if visual.outline is not None:
-            outline = visual.outline[:4] if len(visual.outline) == 4 else (*visual.outline, 255)
-            pygame.gfxdraw.aapolygon(surface, screen_pts, outline)
+            pygame.gfxdraw.aapolygon(surface, buf, visual.outline)
 
     def _draw_soft_debug(
         self,

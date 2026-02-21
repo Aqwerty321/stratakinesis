@@ -42,38 +42,7 @@ def _signed_area(positions: list[tuple[float, float]]) -> float:
 # Hard speed cap for any soft-body node (world units / second).
 # Keep ≤ 10 to prevent spring-network energy amplification in dense meshes.
 _MAX_SPEED = 8.0
-
-
-def _make_velocity_func(
-    damp: float, max_speed: float
-) -> "Callable":
-    """Return a per-substep velocity function for soft-body nodes.
-
-    pymunk calls ``body.velocity_func`` on every ``space.step()``.  By
-    applying velocity damping and speed clamping *every substep*, we prevent
-    energy from building up between the post-frame damping pass in
-    SoftBodySystem.update().
-    """
-    max_speed_sq = max_speed * max_speed
-
-    def _vel_func(
-        body: pymunk.Body,
-        gravity: tuple[float, float],
-        damping: float,
-        dt: float,
-    ) -> None:
-        # Default pymunk velocity update (gravity + space.damping)
-        pymunk.Body.update_velocity(body, gravity, damping, dt)
-        vx = body.velocity.x * damp
-        vy = body.velocity.y * damp
-        speed_sq = vx * vx + vy * vy
-        if speed_sq > max_speed_sq:
-            s = max_speed / math.sqrt(speed_sq)
-            vx *= s
-            vy *= s
-        body.velocity = (vx, vy)
-
-    return _vel_func
+_MAX_SPEED_SQ = _MAX_SPEED * _MAX_SPEED
 
 
 class SoftBodySystem(System):
@@ -119,14 +88,16 @@ class SoftBodySystem(System):
         """
         space = self._physics.space
 
-        # Create per-substep velocity function for this soft body's nodes.
-        # Convert the per-frame damping to per-substep: damp^(1/substeps).
+        # Per-substep damping factor derived from the component's velocity_damping.
+        # Stored on the SoftBody instance so the post-substep hook can read it
+        # without rebuilding the closure on every substep.
         substeps = getattr(self._physics, 'substeps', 1)
-        per_step_damp = soft.velocity_damping ** (1.0 / substeps)
-        vel_func = _make_velocity_func(per_step_damp, _MAX_SPEED)
+        soft._vel_damp = soft.velocity_damping ** (1.0 / substeps)
+
+        # P3: pre-allocate the position buffer once; reused every physics tick.
+        soft._pos_buf = xp.empty((len(soft.nodes), 2), dtype=xp.float64)
 
         for body in soft.nodes:
-            body.velocity_func = vel_func
             space.add(body)
 
         for spring in soft.springs:
@@ -202,12 +173,29 @@ class SoftBodySystem(System):
                 continue
 
             com_vx = weighted_vx / total_mass
-            if abs(com_vx) < 1e-12:
+
+            # A3: Apply per-substep damping + speed cap in this same loop.
+            # Replaces the old velocity_func closure (was: C → Python dispatch
+            # per node per substep).  Now runs as one consolidated Python pass
+            # per substep that also handles COM correction.
+            damp = getattr(soft, '_vel_damp', 1.0)
+            apply_damp = damp < 1.0
+
+            if abs(com_vx) < 1e-12 and not apply_damp:
                 continue
 
-            # Subtract COM horizontal drift from every node
             for body in nodes:
-                body.velocity = (body.velocity.x - com_vx, body.velocity.y)
+                vx = body.velocity.x - com_vx
+                vy = body.velocity.y
+                if apply_damp:
+                    vx *= damp
+                    vy *= damp
+                    speed_sq = vx * vx + vy * vy
+                    if speed_sq > _MAX_SPEED_SQ:
+                        s = _MAX_SPEED / math.sqrt(speed_sq)
+                        vx *= s
+                        vy *= s
+                body.velocity = (vx, vy)
 
     # ------------------------------------------------------------------
     # System update
@@ -231,8 +219,11 @@ class SoftBodySystem(System):
             if n == 0:
                 continue
 
-            # --- 0. Batch-read positions into array ---
-            pos = xp.empty((n, 2), dtype=xp.float64)
+            # --- 0. Batch-read positions into pre-allocated array (P3) ---
+            # Lazy-init fallback for entities updated without prior register().
+            if not hasattr(soft, '_pos_buf') or soft._pos_buf.shape[0] != n:
+                soft._pos_buf = xp.empty((n, 2), dtype=xp.float64)
+            pos = soft._pos_buf  # reuse; shape (n, 2), allocated in register()
             for i, body in enumerate(soft.nodes):
                 pos[i, 0] = body.position.x
                 pos[i, 1] = body.position.y
@@ -262,7 +253,13 @@ class SoftBodySystem(System):
 
             # --- 3. Rebuild visual vertices (array op) ---
             surf_idx = soft.surface_indices
+            S = len(surf_idx)
             surf_pos = pos[surf_idx]  # (S, 2) — surface node positions
             local = surf_pos - centroid[xp.newaxis, :]
-            visual.vertices = [(float(local[i, 0]), float(local[i, 1]))
-                               for i in range(len(surf_idx))]
+            # P2: update in-place rather than reallocating a new list every tick.
+            verts = visual.vertices
+            if len(verts) != S:
+                visual.vertices = [(0.0, 0.0)] * S
+                verts = visual.vertices
+            for i in range(S):
+                verts[i] = (float(local[i, 0]), float(local[i, 1]))
