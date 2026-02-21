@@ -62,6 +62,10 @@ class Physics(Component):
     # Collision mask bitmask: categories this shape will collide with.
     # Two shapes collide only when (A.layer & B.mask) and (B.layer & A.mask) are both non-zero.
     collision_mask: int = 0xFFFF
+    # Per-fixed-step velocity multipliers (applied once per FIXED_DT tick).
+    # 1.0 = no decay; 0.99 ≈ 45 % retained per second at 60 Hz.
+    linear_damping:  float = 1.0
+    angular_damping: float = 1.0
 
 
 # ---------------------------------------------------------------------------

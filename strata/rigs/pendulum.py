@@ -53,9 +53,13 @@ class PendulumRig(Rig):
         anchor: tuple[float, float] = (0.0, 3.0),
         density: float = 1.0,
         color: tuple = _DEFAULT_COLOR,
+        damping: float = 1.0,
     ) -> None:
         super().__init__()
         self.bobs: list = []
+        self.anchor: tuple[float, float] = anchor
+        self._bob_radius = bob_radius
+        self._rod_color: tuple = (60, 110, 170, 255)
 
         ax, ay = anchor
         for i in range(length):
@@ -65,6 +69,8 @@ class PendulumRig(Rig):
                 y=ay - arm_length * (i + 1),
                 density=density,
                 color=color,
+                linear_damping=damping,
+                angular_damping=damping,
             )
             self._entities.append(bob)
             self.bobs.append(bob)
@@ -94,3 +100,37 @@ class PendulumRig(Rig):
                 anchor_a=(0.0, 0.0),
                 anchor_b=(0.0, 0.0),
             )
+
+    # ------------------------------------------------------------------
+    def draw(self, surface, camera) -> None:  # type: ignore[override]
+        """Draw rods connecting anchor → bob[0] → bob[1] → …
+
+        Call this inside ``game.on_draw`` so that rods are rendered on
+        top of the physics debug layer but below the F3 overlay.
+        """
+        import pygame
+        import pygame.gfxdraw
+        from strata.ecs.components import Physics
+
+        rod_w = max(3, int(0.07 * camera.scale))
+        cap_r = rod_w // 2           # circle cap radius = half rod width
+        col   = self._rod_color
+
+        prev_sx, prev_sy = camera.world_to_screen(*self.anchor)
+
+        for bob in self.bobs:
+            phys = bob.get_component(Physics)
+            if phys is None:
+                continue
+            bx, by = phys.body.position
+            sx, sy = camera.world_to_screen(bx, by)
+
+            # Filled thick line segment (body of the rod)
+            pygame.draw.line(surface, col, (prev_sx, prev_sy), (sx, sy), rod_w)
+            # Round caps so the rod looks smooth at the joints
+            pygame.gfxdraw.filled_circle(surface, prev_sx, prev_sy, cap_r, col)
+            pygame.gfxdraw.aacircle(surface,     prev_sx, prev_sy, cap_r, col)
+            pygame.gfxdraw.filled_circle(surface, sx, sy, cap_r, col)
+            pygame.gfxdraw.aacircle(surface,     sx, sy, cap_r, col)
+
+            prev_sx, prev_sy = sx, sy

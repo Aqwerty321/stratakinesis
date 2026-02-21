@@ -70,6 +70,7 @@ if __name__ == "__main__":
         anchor     = (-5.5, CEIL_Y),
         density    = 2.0,
         color      = COL_PEND,
+        damping    = 0.993,   # ~34 % velocity decay per second
     )
     game.scene.add_rig(pend)
     # knock the first bob sideways so it swings immediately
@@ -81,13 +82,14 @@ if __name__ == "__main__":
     # Under gravity the chain forms a catenary curve hanging from the left end.
     chain = ChainRig(
         length      = 7,
-        link_width  = 0.5,
-        link_height = 0.18,
+        link_width  = 0.35,
+        link_height = 0.22,
         start_x     = -2.0,
-        start_y     = CEIL_Y - 0.3,      # just below ceiling
+        start_y     = CEIL_Y,            # top edge of first link at ceiling
         anchor      = (-2.0, CEIL_Y),
         density     = 0.8,
         color       = COL_CHAIN,
+        damping     = 0.991,  # ~42 % velocity decay per second
     )
     game.scene.add_rig(chain)
 
@@ -102,6 +104,7 @@ if __name__ == "__main__":
         anchor      = (1.5, CEIL_Y),
         density     = 0.5,
         color       = COL_ROPE,
+        damping     = 0.993,  # ~34 % velocity decay per second
     )
     game.scene.add_rig(rope)
 
@@ -178,7 +181,11 @@ if __name__ == "__main__":
 
     game.on_fixed_update = on_fixed_update
     game.on_update = on_update
-    game.on_draw   = lambda surf, cam: gears.draw(surf, cam)
+    def on_draw(surf, cam) -> None:
+        pend.draw(surf, cam)
+        gears.draw(surf, cam)
+
+    game.on_draw = on_draw
 
     print(
         "STRATA rig demo\n"

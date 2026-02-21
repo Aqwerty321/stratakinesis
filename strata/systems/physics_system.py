@@ -178,7 +178,21 @@ class PhysicsSystem(System):
             # Run post-substep hooks (e.g. soft-body COM correction).
             for hook in self._post_substep_hooks:
                 hook(sub_dt)
+        self._apply_body_damping(world)
         self._sync_transforms(world)
+
+    def _apply_body_damping(self, world: World) -> None:
+        """Apply per-body linear and angular damping once per fixed step."""
+        for entity in world.get_entities_with(Physics):
+            phys: Physics = entity.get_component(Physics)
+            if phys.is_static:
+                continue
+            if phys.linear_damping < 1.0:
+                v = phys.body.velocity
+                d = phys.linear_damping
+                phys.body.velocity = (v.x * d, v.y * d)
+            if phys.angular_damping < 1.0:
+                phys.body.angular_velocity *= phys.angular_damping
 
     def _sync_transforms(self, world: World) -> None:
         """Copy body position/angle back into Transform components."""

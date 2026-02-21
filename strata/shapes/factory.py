@@ -71,6 +71,8 @@ class Sprite:
         static: bool = False,
         color: tuple[int, ...] = _DEFAULT_CIRCLE_COLOR,
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
+        linear_damping: float = 1.0,
+        angular_damping: float = 1.0,
     ) -> Entity:
         """Create a circular sprite.
 
@@ -116,7 +118,10 @@ class Sprite:
             shape.friction = 0.8
 
             entity.add_component(
-                Physics(body=body, shape=shape, density=density, is_static=static)
+                Physics(
+                    body=body, shape=shape, density=density, is_static=static,
+                    linear_damping=linear_damping, angular_damping=angular_damping,
+                )
             )
 
         return entity
@@ -132,6 +137,8 @@ class Sprite:
         static: bool = False,
         color: tuple[int, ...] = _DEFAULT_RECT_COLOR,
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
+        linear_damping: float = 1.0,
+        angular_damping: float = 1.0,
     ) -> Entity:
         """Create a rectangular sprite.
 
@@ -177,7 +184,10 @@ class Sprite:
             shape.friction = 0.9
 
             entity.add_component(
-                Physics(body=body, shape=shape, density=density, is_static=static)
+                Physics(
+                    body=body, shape=shape, density=density, is_static=static,
+                    linear_damping=linear_damping, angular_damping=angular_damping,
+                )
             )
 
         return entity

@@ -48,6 +48,7 @@ class RopeRig(Rig):
         anchor: tuple[float, float] | None = None,
         density: float = 1.0,
         color: tuple = _DEFAULT_COLOR,
+        damping: float = 1.0,
     ) -> None:
         super().__init__()
         self.beads: list = []
@@ -59,6 +60,8 @@ class RopeRig(Rig):
                 y=start_y,
                 density=density,
                 color=color,
+                linear_damping=damping,
+                angular_damping=damping,
             )
             self._entities.append(bead)
             self.beads.append(bead)
