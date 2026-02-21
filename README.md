@@ -1,25 +1,22 @@
-# STRATA -- Engineered with Stratakinesis
+# STRATA — Engineered with Stratakinesis
 
 **Strata** is a deterministic, rigging-first 2D engine library for Python.
-It uses pygame-ce for rendering, pymunk for physics, and numpy (or cupy) for batch math.
-
-```
-STRATA
-Engineered with Stratakinesis
-```
+pygame-ce for rendering · pymunk for physics · numpy / cupy for batch math.
 
 ---
 
 ## What it does
 
-- **Deterministic physics** -- fixed-timestep accumulator, never variable dt. Same inputs = same outputs.
-- **Minimal ECS** -- Entity (int ID + component dict), World/Scene, ordered Systems pipeline.
-- **Rig-first design** -- MotorRig, PropertyBinding, and more rigs coming. Behavior is data; systems interpret it.
-- **Render interpolation** -- sub-step alpha lerp with shortest-path angle interpolation. No jitter at any frame rate.
-- **Timestamped input buffer** -- events are stamped with `time.monotonic()` and delivered to the exact physics step they belong to via `on_fixed_update`.
-- **Hook API** -- `on_event`, `on_update`, `on_fixed_update`. Zero subclassing. Assign a function and go.
-- **F3 debug overlay** -- FPS, entity count, physics steps, gravity, vsync status, platform detection.
-- **WSL-aware** -- auto-detects WSLg, disables vsync (which adds compositor latency there), caps at 240fps.
+- **Deterministic physics** — fixed-timestep accumulator, never variable dt. Same inputs = same simulation, every time.
+- **Rig assembly system** — six production-ready rigs out of the box: `PendulumRig`, `ChainRig`, `RopeRig`, `GearTrainRig`, `LeverRig`, `HingeMotorRig`. Drop them into a scene with one call.
+- **Soft bodies** — spring-mass meshes with structural/shear/bending tiers, pressure simulation, and COM correction. Deform, squish, bounce.
+- **Minimal ECS** — Entity (int ID + component dict), World/Scene, ordered systems pipeline. No magic. No global state.
+- **Render interpolation** — sub-step alpha lerp with shortest-path angle interpolation so motion is silky at any frame rate.
+- **Timestamped input buffer** — events are stamped with `time.monotonic()` and delivered to the exact physics step they belong to.
+- **Per-body damping** — `linear_damping` / `angular_damping` on every `Physics` body. Pendulums decay naturally. No global drag hacks.
+- **Hook API** — `on_event`, `on_update`, `on_fixed_update`, `on_draw`. Zero subclassing. Assign a function and go.
+- **F3 debug overlay** — FPS, entity count, physics steps, gravity, vsync status, platform info.
+- **WSL-aware** — auto-detects WSLg, disables vsync, caps at 240 fps.
 
 ---
 
@@ -28,10 +25,11 @@ Engineered with Stratakinesis
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[gpu]"   # or just: pip install -e .
+pip install -e ".[gpu]"   # or: pip install -e .
 
 python examples/demo_basic.py
-python examples/demo_motor.py
+python examples/demo_joints.py
+python examples/demo_soft_body.py
 ```
 
 ---
@@ -41,65 +39,76 @@ python examples/demo_motor.py
 ```python
 from strata import Game, Sprite
 
-game = Game(window_size=(1024, 768))
-ball = Sprite.circle(radius=1.0, x=0.0, y=5.0, density=1.0, physics=True)
-ground = Sprite.rect(width=20.0, height=1.0, x=0.0, y=-1.0, static=True)
+game = Game(window_size=(1280, 720))
+ball   = Sprite.circle(radius=1.0, x=0.0, y=5.0, density=1.0)
+ground = Sprite.rect(width=20.0, height=0.5, y=-4.0, static=True)
 
 game.scene.add_entities(ball, ground)
 game.run()
 ```
 
-All values are in **world units** (16x9 default viewport). The camera handles scale-to-fit. Window is resizable.
+All values are **world units** (16×9 default viewport). Camera handles scale-to-fit. Window is resizable.
 
 ---
 
-## Motor-driven wheel with input
+## Rig system (v0.4)
+
+Rigs are assembled constraint graphs. One call creates bodies, joints, and motors; everything is registered automatically when you call `scene.add_rig()`.
 
 ```python
-import pygame
-from strata import Game, Sprite
-from strata.ecs.components import MotorRig, Physics
-from strata.core.input_buffer import StampedEvent
+from strata.rigs import PendulumRig, GearTrainRig, ChainRig
 
-game = Game(window_size=(1024, 768), title="Motor Demo")
+# Double pendulum with natural decay
+pend = PendulumRig(length=2, arm_length=1.8, anchor=(0, 4), damping=0.993)
+game.scene.add_rig(pend)
 
-ground = Sprite.rect(width=20.0, height=0.5, y=-3.5, static=True)
-wheel  = Sprite.circle(radius=0.8, x=-5.0, y=-2.0, density=1.0, physics=True)
-wheel.get_component(Physics).shape.friction = 2.0
-wheel.add_component(MotorRig(target_rate=8.0, max_force=5e5))
+# Three interlocking gears with trapezoidal teeth, motor-driven
+gears = GearTrainRig(radii=[0.75, 0.45, 0.60], x=0, y=-3, motor_rate=3.0)
+game.scene.add_rig(gears)
+game.on_draw = lambda surf, cam: gears.draw(surf, cam)
 
-game.scene.add_entities(ground, wheel)
-
-rig = wheel.get_component(MotorRig)
-
-def on_fixed_update(dt: float, events: list[StampedEvent]) -> None:
-    for se in events:
-        if se.event.type == pygame.KEYDOWN and se.event.key == pygame.K_SPACE:
-            rig.target_rate *= -1.0
-
-def on_update(dt: float) -> None:
-    keys = game.input.poll_keys()
-    if keys[pygame.K_RIGHT]: rig.target_rate = min(rig.target_rate + 0.1, 20.0)
-    if keys[pygame.K_LEFT]:  rig.target_rate = max(rig.target_rate - 0.1, -20.0)
-
-game.on_fixed_update = on_fixed_update
-game.on_update = on_update
-game.run()
+# 7-link hanging chain
+chain = ChainRig(length=7, start_x=3, start_y=4, anchor=(3, 4), damping=0.991)
+game.scene.add_rig(chain)
 ```
 
-`on_fixed_update` fires once per physics step with timestamped events. `on_update` fires once per render frame for continuous key polling. No raw game loop needed.
+| Rig | Physics | Visual |
+|---|---|---|
+| `PendulumRig` | PinJoint chain, per-body damping | bob circles (+ optional rod via `draw()`) |
+| `ChainRig` | Vertical PinJoint chain, top-edge pivots | rectangular links |
+| `RopeRig` | SlideJoint chain (slack/sag) | circle beads |
+| `GearTrainRig` | GearJoints, SimpleMotor | parametric trapezoidal teeth via `gfxdraw` |
+| `LeverRig` | PivotJoint + RotaryLimit | rectangular plank |
+| `HingeMotorRig` | PivotJoint + SimpleMotor | any entity |
+
+---
+
+## Soft bodies
+
+```python
+blob = Sprite.soft_circle(
+    radius=1.2, x=0, y=3,
+    rings=4, segments=12,
+    stiffness=400, damping=12,
+    pressure=90,
+)
+game.scene.add_entity(blob)
+```
+
+Soft bodies use a three-tier spring network (structural → shear → bending) with a centre-of-mass correction pass each substep to prevent energy blowup at high stiffness.
 
 ---
 
 ## Hook API
 
-| Hook | When it fires | Use for |
+| Hook | Fires | Use for |
 |---|---|---|
-| `game.on_event(event)` | Once per pygame event, after built-in handling (QUIT/ESC/F3/VIDEORESIZE already processed) | UI clicks, menu toggles, non-physics events |
-| `game.on_update(dt)` | Once per render frame, with raw frame_time before clamp | Continuous key polling, HUD updates, camera control |
-| `game.on_fixed_update(dt, events)` | Once per physics step inside the accumulator, with that step's `StampedEvent` slice | Discrete input (jump, fire, reverse), physics-affecting logic |
+| `game.on_event(event)` | Every pygame event | UI, menu toggles |
+| `game.on_update(dt)` | Every render frame | Key polling, HUD, camera |
+| `game.on_fixed_update(dt, events)` | Every physics step | Discrete input, physics-affecting logic |
+| `game.on_draw(surface, camera)` | After `scene.draw()`, before F3 overlay | Custom gfxdraw, rig visuals |
 
-All hooks are optional. Assign a callable or leave as `None`.
+All hooks are optional callables. Assign or leave `None`.
 
 ---
 
@@ -107,50 +116,55 @@ All hooks are optional. Assign a callable or leave as `None`.
 
 ```
 strata/
-  __init__.py          # exports: Game, Sprite, InputBuffer, StampedEvent
-  config.py            # ASPECT_RATIO, WORLD_WIDTH/HEIGHT, FIXED_DT, MAX_FRAME_TIME
-  backend/
-    array.py           # xp = cupy | numpy
+  __init__.py              # exports: Game, Sprite
+  config.py                # WORLD_WIDTH/HEIGHT, FIXED_DT, MAX_FRAME_TIME
+  backend/array.py         # xp = cupy | numpy
   core/
-    clock.py           # Clock with tick() and fps
-    input_buffer.py    # StampedEvent, InputBuffer (drain/consume/clear/poll_keys)
-    loop.py            # Game, Scene, run loop, hooks, F3 overlay
+    clock.py               # Clock: tick() + fps
+    input_buffer.py        # StampedEvent, InputBuffer
+    loop.py                # Game, Scene, run loop, hooks, F3 overlay
   ecs/
-    entity.py          # Entity (int ID + component dict)
-    components.py      # Transform, Physics, Visual, MotorRig, PropertyBinding
-    world.py           # World (entity registry + systems), update/draw
+    entity.py              # Entity (int ID + component dict)
+    components.py          # Transform, Physics, Visual, SoftBody, PropertyBinding
+    world.py               # World (entity registry + systems)
   systems/
-    base.py            # System base class
-    physics_system.py  # pymunk.Space wrapper, fixed-step, transform sync
-    render_system.py   # pygame-ce gfxdraw, interpolation, viewport culling
-    rig_system.py      # MotorRig execution, PropertyBinding mirroring
-  render/
-    camera.py          # Scale-to-fit, world_to_screen, screen_to_world
-  shapes/
-    factory.py         # Sprite.circle(), Sprite.rect(), density -> mass
+    physics_system.py      # pymunk.Space, fixed-step, per-body damping, transform sync
+    soft_body_system.py    # spring-mass registration, velocity func, COM correction
+    render_system.py       # gfxdraw, interpolation, viewport culling
+    rig_system.py          # constraint assembly + PropertyBinding mirroring
+    binding_system.py      # PropertyBinding mirroring
+  render/camera.py         # scale-to-fit, world_to_screen, screen_to_world
+  shapes/factory.py        # Sprite.circle/rect/polygon/soft_circle/soft_rect
+  rigs/
+    base.py                # Rig + JointHandle (constraint spec → pymunk)
+    pendulum.py            # PendulumRig
+    chain.py               # ChainRig
+    rope.py                # RopeRig
+    gear_train.py          # GearTrainRig
+    gear_utils.py          # gear_polygon(), select_num_teeth(), initial_tooth_phases()
+    lever.py               # LeverRig
+    hinge_motor.py         # HingeMotorRig
 examples/
-  demo_basic.py        # Ball + ground
-  demo_motor.py        # Motor wheel + arrow keys + PropertyBinding follower
-tests/
-  test_loop.py         # Accumulator determinism, hooks
-  test_ecs.py          # Entity/World/Scene CRUD
-  test_camera.py       # Scale-to-fit, conversions, angle lerp
-  test_physics.py      # Gravity, sync, density -> mass
-  test_rig_system.py   # MotorRig, PropertyBinding, RigSystem
-  test_input_buffer.py # Drain, consume, clear, per-step delivery
+  demo_basic.py            # Ball + ground
+  demo_motor.py            # Motor wheel + input
+  demo_joints.py           # All six rigs in one scene
+  demo_soft_body.py        # Soft-body meshes
+  demo_collisions.py       # Collision callbacks
+  demo_soft_collisions.py  # Soft body + rigid collisions
+tests/                     # 163 tests
 ```
 
-21 Python files. ~2300 LOC. 78 tests.
+46 Python files · ~6 400 LOC · 163 tests
 
 ---
 
-## Systems pipeline
+## Systems pipeline (each fixed step)
 
-Systems run in this order every fixed step:
-
-1. **PhysicsSystem** -- `space.step(FIXED_DT)`, then syncs pymunk body positions/angles to `Transform` components (snapshots `prev_*` before overwrite for interpolation)
-2. **RigSystem** -- creates/updates pymunk constraints for MotorRigs, mirrors Transform attributes via PropertyBindings (reads fresh post-physics transforms)
-3. **RenderSystem** -- draws entities using interpolated positions (`alpha = accumulator / FIXED_DT`) with shortest-path angle lerp and viewport culling
+1. **PhysicsSystem** — `space.step()` × substeps, per-body `linear_damping` / `angular_damping`, Transform sync
+2. **SoftBodySystem** — COM correction hook run inside each substep
+3. **BindingSystem** — PropertyBinding mirroring (reads fresh post-physics Transforms)
+4. **RigSystem** — lazy constraint registration for newly added rigs
+5. **RenderSystem** — interpolated draw (`alpha = accumulator / FIXED_DT`), shortest-path angle lerp, viewport culling
 
 ---
 
@@ -158,10 +172,9 @@ Systems run in this order every fixed step:
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `ASPECT_RATIO` | `(16, 9)` | Boot-time only. Immutable. |
 | `WORLD_WIDTH` | `16.0` | World units across viewport |
 | `WORLD_HEIGHT` | `9.0` | Derived from aspect ratio |
-| `FIXED_DT` | `1/60` | Physics timestep (seconds) |
+| `FIXED_DT` | `1/60` | Physics timestep (s) |
 | `MAX_FRAME_TIME` | `0.25` | Spiral-of-death clamp |
 
 ---
@@ -170,8 +183,8 @@ Systems run in this order every fixed step:
 
 | Key | Action |
 |---|---|
-| ESC | Quit |
-| F3 | Toggle debug overlay |
+| `ESC` | Quit |
+| `F3` | Toggle debug overlay |
 
 ---
 
@@ -180,10 +193,10 @@ Systems run in this order every fixed step:
 - `FIXED_DT` is the only physics timestep. No variable stepping.
 - Aspect ratio and world dimensions are immutable after boot.
 - Visual vertex arrays are cached at entity creation. Never rebuilt per frame.
-- `mass = density * area`. pymunk moment helpers compute inertia.
-- Rigs are data-only components. Systems interpret them. No logic in components.
-- All hooks are optional callables. No subclassing required.
-- Input goes through `InputBuffer` / `screen_to_world`. Raw pygame in userland is discouraged.
+- `mass = density × area`. pymunk moment helpers compute inertia.
+- Rigs are pure data + constraint specs. No simulation logic lives in rig classes.
+- Damping is per-body and multiplicative, applied once per fixed step after `space.step()`.
+- Input goes through `InputBuffer`. Raw pygame event polling in userland is discouraged.
 
 ---
 
@@ -192,9 +205,9 @@ Systems run in this order every fixed step:
 | Package | Purpose |
 |---|---|
 | `pygame-ce` | Rendering, window, events |
-| `pymunk` | 2D physics (Chipmunk) |
+| `pymunk` | 2D rigid-body physics (Chipmunk) |
 | `numpy` | Array math (default backend) |
-| `cupy` (optional) | GPU-accelerated array math |
+| `cupy` *(optional)* | GPU-accelerated array math |
 
 ---
 
@@ -204,18 +217,13 @@ Systems run in this order every fixed step:
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy .venv/bin/pytest tests/ -q
 ```
 
-78 passing. Covers: accumulator determinism, ECS CRUD, camera math, physics sync, rig execution, input buffer delivery, hook wiring.
+163 passing. Covers: accumulator determinism, ECS CRUD, camera math, physics sync, rig constraint assembly, soft-body registration, input buffer delivery, collision events, hook wiring.
 
 ---
 
 ## What's next
 
-See [VISION.md](VISION.md) for the full roadmap. Near-term:
-
-- **v0.2**: `Sprite.polygon()`, collision callbacks, scene management
-- **v0.3**: Audio system, sprite sheets, Tiled map importer
-- **v0.4**: SpringRig, HingeRig, SliderRig, rig composition
-- **v1.0**: Rollback netcode (InputBuffer is already timestamped and per-step)
+See [VISION.md](VISION.md) for the full roadmap.
 
 ---
 
