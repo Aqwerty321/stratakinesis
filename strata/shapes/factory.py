@@ -20,6 +20,10 @@ from strata.core.collision_groups import CollisionGroups
 # Game.groups points to this same instance and can be used to query/allocate.
 _collision_groups = CollisionGroups()
 
+# P-OPT-10: Shared image asset cache — avoids repeated pygame.image.load()
+# for the same file path.  Maps resolved path → converted Surface.
+_image_cache: dict[str, "pygame.Surface"] = {}  # type: ignore[name-defined]
+
 
 def _resolve_collision(group, collides_with):
     """Convert string group/collides_with to bitmask layer/mask.
@@ -359,15 +363,21 @@ class Sprite:
         collides_with : group name(s) this shape collides with.
         """
         import pygame as _pg
+        import os as _os
 
-        surf = _pg.image.load(path)
-        try:
-            if surf.get_alpha() is not None or surf.get_colorkey() is not None:
-                surf = surf.convert_alpha()
-            else:
-                surf = surf.convert()
-        except _pg.error:
-            pass  # headless / no display — keep unconverted surface
+        # P-OPT-10: Shared image asset cache — reuse already-loaded surfaces.
+        resolved = _os.path.abspath(path)
+        surf = _image_cache.get(resolved)
+        if surf is None:
+            surf = _pg.image.load(path)
+            try:
+                if surf.get_alpha() is not None or surf.get_colorkey() is not None:
+                    surf = surf.convert_alpha()
+                else:
+                    surf = surf.convert()
+            except _pg.error:
+                pass  # headless / no display — keep unconverted surface
+            _image_cache[resolved] = surf
 
         img_w, img_h = surf.get_size()
         aspect = img_w / max(img_h, 1)

@@ -161,7 +161,7 @@ class SoftBodySystem(System):
     # ------------------------------------------------------------------
 
     def _post_substep_com_correct(self, sub_dt: float) -> None:
-        """Remove net horizontal momentum from each soft body.
+        """Remove net horizontal momentum from each soft body (vectorized).
 
         pymunk's sequential collision solver creates asymmetric impulses
         across the many independent node-bodies of a soft mesh.  Correcting
@@ -172,6 +172,9 @@ class SoftBodySystem(System):
         Only the X axis is corrected; Y is left alone because gravity gives
         every node the same downward acceleration and zeroing COM-Y would
         make the body float.
+
+        P-OPT-1: Uses preallocated _vel_buf / _mass_buf / _total_mass from
+        register() for fully vectorized COM correction + damping + speed cap.
         """
         # Recompute per-substep damping factor when substep count changes
         # (adaptive CCD). This keeps damping behavior correct regardless of
@@ -182,47 +185,49 @@ class SoftBodySystem(System):
             for soft in self._soft_bodies:
                 soft._vel_damp = soft.velocity_damping ** (1.0 / current_substeps)
 
+        _xp = xp  # local ref
+        _sqrt = math.sqrt
+
         for soft in self._soft_bodies:
             nodes = soft.nodes
             n = len(nodes)
             if n == 0:
                 continue
 
-            # Accumulate mass-weighted horizontal velocity
-            total_mass = 0.0
-            weighted_vx = 0.0
-            for body in nodes:
-                m = body.mass
-                total_mass += m
-                weighted_vx += body.velocity.x * m
+            # --- Batch-read velocities into preallocated buffer ---
+            vel = soft._vel_buf  # (n, 2), allocated in register()
+            vel[:] = [(b.velocity.x, b.velocity.y) for b in nodes]
 
+            # --- Vectorized COM-X computation ---
+            total_mass = soft._total_mass
             if total_mass <= 0:
                 continue
 
-            com_vx = weighted_vx / total_mass
+            com_vx = float(_xp.dot(vel[:, 0], soft._mass_buf)) / total_mass
 
-            # A3: Apply per-substep damping + speed cap in this same loop.
-            # Replaces the old velocity_func closure (was: C → Python dispatch
-            # per node per substep).  Now runs as one consolidated Python pass
-            # per substep that also handles COM correction.
             damp = getattr(soft, '_vel_damp', 1.0)
             apply_damp = damp < 1.0
 
             if abs(com_vx) < 1e-12 and not apply_damp:
                 continue
 
-            for body in nodes:
-                vx = body.velocity.x - com_vx
-                vy = body.velocity.y
-                if apply_damp:
-                    vx *= damp
-                    vy *= damp
-                    speed_sq = vx * vx + vy * vy
-                    if speed_sq > _MAX_SPEED_SQ:
-                        s = _MAX_SPEED / math.sqrt(speed_sq)
-                        vx *= s
-                        vy *= s
-                body.velocity = (vx, vy)
+            # --- Vectorized correction + damping + speed cap ---
+            vel[:, 0] -= com_vx
+
+            if apply_damp:
+                vel *= damp
+                # Speed cap via vectorized norm
+                speeds_sq = vel[:, 0] * vel[:, 0] + vel[:, 1] * vel[:, 1]
+                mask = speeds_sq > _MAX_SPEED_SQ
+                if _xp.any(mask):
+                    # Scale down only the fast bodies
+                    scale = _MAX_SPEED / _xp.sqrt(speeds_sq[mask])
+                    vel[mask, 0] *= scale
+                    vel[mask, 1] *= scale
+
+            # --- Batch write-back ---
+            for i, body in enumerate(nodes):
+                body.velocity = (float(vel[i, 0]), float(vel[i, 1]))
 
     # ------------------------------------------------------------------
     # System update
@@ -283,15 +288,24 @@ class SoftBodySystem(System):
             S = len(surf_idx)
             surf_pos = pos[surf_idx]  # (S, 2) — surface node positions
             local = surf_pos - centroid[xp.newaxis, :]
-            # P2: update in-place rather than reallocating a new list every tick.
-            # P0-4: single .tolist() C call replaces 2S individual float() calls.
-            local_list = local.tolist()
-            verts = visual.vertices
-            if len(verts) != S:
-                visual.vertices = [(row[0], row[1]) for row in local_list]
-                verts = visual.vertices
+
+            # P-OPT-2: Update the cached ndarray directly instead of
+            # rebuilding a Python list + invalidating _verts_arr every tick.
+            # RenderSystem reads _verts_arr; we keep it canonical.
+            verts_arr = visual._verts_arr
+            if verts_arr is None or verts_arr.shape[0] != S:
+                # First tick or vertex count changed — allocate fresh.
+                visual._verts_arr = local.copy()
+                # Also sync the list representation for any consumers.
+                visual.vertices = local.tolist()
             else:
-                for i in range(S):
-                    verts[i] = (local_list[i][0], local_list[i][1])
-            # Invalidate the cached numpy array so RenderSystem sees fresh data.
-            visual._verts_arr = None
+                # Hot path: in-place update — zero allocation.
+                verts_arr[:] = local
+                # Keep the list in sync (some debug paths read it).
+                local_list = local.tolist()
+                verts = visual.vertices
+                if len(verts) != S:
+                    visual.vertices = [(row[0], row[1]) for row in local_list]
+                else:
+                    for i in range(S):
+                        verts[i] = (local_list[i][0], local_list[i][1])

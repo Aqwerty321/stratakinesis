@@ -229,10 +229,14 @@ class GearTrainRig(Rig):
             cos_a = _cos(raw_angle)
             sin_a = _sin(raw_angle)
             local = self._local_tooth_arr[i]  # (72, 2) float64
-            rot = xp.array([[cos_a, -sin_a], [sin_a, cos_a]], dtype=xp.float64)
-            world = local @ rot.T
-            world[:, 0] += cx
-            world[:, 1] += cy
+            # P-OPT-6: Direct scalar rotation — avoids allocating 2×2 matrix.
+            lx = local[:, 0]
+            ly = local[:, 1]
+            if not hasattr(self, '_gear_world_buf') or self._gear_world_buf.shape[0] != local.shape[0]:
+                self._gear_world_buf = xp.empty_like(local)
+            world = self._gear_world_buf
+            world[:, 0] = lx * cos_a - ly * sin_a + cx
+            world[:, 1] = lx * sin_a + ly * cos_a + cy
             pts = w2s_batch(world).tolist()
 
             if len(pts) < 3:

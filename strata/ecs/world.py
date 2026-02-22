@@ -21,8 +21,16 @@ class World:
         # Kept in sync by _index_entity / _unindex_entity.
         self._component_index: dict[type, set[int]] = {}
         self._systems: list["System"] = []       # ordered by priority (ascending)
-        # P1-7: Query result cache — invalidated on entity add/remove.
+        # P-OPT-15: Pre-filtered list of systems with draw methods.
+        self._draw_systems: list["System"] = []
+        # P-OPT-14: Query result cache with per-component-type versioning.
+        # Only invalidate queries that involve the component types of the
+        # added/removed entity, not the entire cache.
         self._query_cache: dict[tuple[type, ...], list[Entity]] = {}
+        # Version counter per component type — incremented on add/remove.
+        self._comp_version: dict[type, int] = {}
+        # Snapshot of versions when each cache entry was created.
+        self._query_versions: dict[tuple[type, ...], tuple[int, ...]] = {}
 
     # ------------------------------------------------------------------
     # Index helpers
@@ -36,7 +44,8 @@ class World:
                 self._component_index[ct].add(entity.id)
             except KeyError:
                 self._component_index[ct] = {entity.id}
-        self._query_cache.clear()  # P1-7: invalidate
+            # P-OPT-14: Bump version for affected component types only.
+            self._comp_version[ct] = self._comp_version.get(ct, 0) + 1
 
     def _unindex_entity(self, entity: Entity) -> None:
         """Remove entity from the id map and component index."""
@@ -45,7 +54,8 @@ class World:
             s = self._component_index.get(ct)
             if s:
                 s.discard(entity.id)
-        self._query_cache.clear()  # P1-7: invalidate
+            # P-OPT-14: Bump version for affected component types only.
+            self._comp_version[ct] = self._comp_version.get(ct, 0) + 1
 
     # ------------------------------------------------------------------
     # Entity management
@@ -92,10 +102,16 @@ class World:
         """
         if not component_types:
             return list(self._entities)
-        # P1-7: check cache first.
+        # P-OPT-14: Check version freshness instead of clearing entire cache.
         cached = self._query_cache.get(component_types)
         if cached is not None:
-            return cached
+            saved_versions = self._query_versions.get(component_types)
+            if saved_versions is not None:
+                current_versions = tuple(
+                    self._comp_version.get(ct, 0) for ct in component_types
+                )
+                if saved_versions == current_versions:
+                    return cached
         # Collect the id-sets for each requested type, fall back to empty set
         # for unknown types.  Sort by size so the intersection starts small.
         sets = sorted(
@@ -119,6 +135,10 @@ class World:
                     key=lambda e: e.id,
                 )
         self._query_cache[component_types] = result
+        # P-OPT-14: Store current versions for freshness check.
+        self._query_versions[component_types] = tuple(
+            self._comp_version.get(ct, 0) for ct in component_types
+        )
         return result
 
     @property
@@ -132,6 +152,8 @@ class World:
     def add_system(self, system: "System") -> None:
         """Register a system.  Systems are called in insertion order each tick."""
         self._systems.append(system)
+        # P-OPT-15: Rebuild draw_systems list to avoid hasattr() per frame.
+        self._draw_systems = [s for s in self._systems if hasattr(s, "draw")]
 
     # ------------------------------------------------------------------
     # Update / draw
@@ -143,7 +165,9 @@ class World:
             system.update(self, dt)
 
     def draw(self, surface, camera, alpha: float = 1.0) -> None:  # type: ignore[type-arg]
-        """Call draw() on every system that supports it, passing interpolation alpha."""
-        for system in self._systems:
-            if hasattr(system, "draw"):
-                system.draw(self, surface, camera, alpha)
+        """Call draw() on every system that supports it, passing interpolation alpha.
+
+        P-OPT-15: Iterates pre-built _draw_systems list — no hasattr() per frame.
+        """
+        for system in self._draw_systems:
+            system.draw(self, surface, camera, alpha)

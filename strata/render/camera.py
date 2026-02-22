@@ -7,7 +7,8 @@
 from __future__ import annotations
 import math
 
-from strata.backend.array import xp
+import numpy as np
+
 from strata.config import WORLD_WIDTH, WORLD_HEIGHT
 
 
@@ -79,14 +80,16 @@ class Camera:
         """Convert (N,2) world-space coords → (N,2) int32 screen coords.
 
         Accepts any array-like (list-of-tuples, numpy/cupy array).
-        Returns an ``xp.ndarray`` of shape ``(N, 2)`` with dtype ``int32``.
-        Much faster than calling ``world_to_screen`` in a Python loop.
+        Returns a ``numpy.ndarray`` of shape ``(N, 2)`` with dtype ``int32``.
+
+        P-OPT-13: Always uses numpy to avoid GPU↔CPU sync when CuPy is the
+        active backend.  Render paths only need CPU arrays for pygame.
         """
-        pts = xp.asarray(world_pts, dtype=xp.float64)
-        out = xp.empty_like(pts)
+        pts = np.asarray(world_pts, dtype=np.float64)
+        out = np.empty_like(pts)
         out[:, 0] = self.offset_x + (pts[:, 0] + self._half_w) * self.scale
         out[:, 1] = self.offset_y + (self._half_h - pts[:, 1]) * self.scale
-        return out.astype(xp.int32)
+        return out.astype(np.int32)
 
     def scale_length(self, world_length: float) -> int:
         """Convert a world-unit length to screen pixels (for radii, etc.)."""

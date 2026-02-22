@@ -145,6 +145,10 @@ class PhysicsSystem(System):
         self._ccd_extents: xp.ndarray | None = None
         self._ccd_dirty: bool = False  # True when _list was appended to
 
+        # P-OPT-3: Cached per-body speeds from _compute_substeps, reused by
+        # _sweep_fast_bodies to avoid recomputing sqrt per body.
+        self._ccd_speeds: xp.ndarray | None = None
+
         # Bodies belonging to soft-body entities — excluded from CCD
         # because they already have _MAX_SPEED cap + per-substep damping.
         self._soft_body_bodies: set[int] = set()  # set of body id()s
@@ -238,14 +242,16 @@ class PhysicsSystem(System):
         # Remove all constraints that reference this body BEFORE removing
         # the body itself.  This prevents leaked constraints from holding
         # stale body references in the space.
+        # P-OPT-11: Batch-collect then batch-remove to avoid repeated list()
+        # calls on space.constraints.
         if physics.body is not None:
             body = physics.body
-            constraints_to_remove = [
-                c for c in list(self.space.constraints)
+            to_remove = [
+                c for c in self.space.constraints
                 if c.a is body or c.b is body
             ]
-            for c in constraints_to_remove:
-                self.space.remove(c)
+            if to_remove:
+                self.space.remove(*to_remove)
 
         if physics.body is not None and physics.body not in (
             self.space.static_body, self._static_body
@@ -373,19 +379,27 @@ class PhysicsSystem(System):
         """Return the number of substeps needed so that no CCD-tracked body
         moves more than ``_CCD_SAFETY_FACTOR × extent`` per substep.
 
+        P-OPT-3: Also caches per-body speeds in ``self._ccd_speeds`` so
+        ``_sweep_fast_bodies`` can reuse them instead of recomputing.
+
         Deterministic: same body velocities + same dt always yields the same
         substep count.
         """
         self._ensure_ccd_extents()
         n = len(self._ccd_bodies)
         if n == 0:
+            self._ccd_speeds = None
             return self.base_substeps
 
         # Batch-read speeds into numpy — one C-boundary crossing.
         speeds = xp.empty(n, dtype=xp.float64)
+        _sqrt = math.sqrt
         for i, body in enumerate(self._ccd_bodies):
             v = body.velocity
-            speeds[i] = math.sqrt(v.x * v.x + v.y * v.y)
+            speeds[i] = _sqrt(v.x * v.x + v.y * v.y)
+
+        # Cache for reuse in _sweep_fast_bodies (P-OPT-3).
+        self._ccd_speeds = speeds
 
         # travel_ratios[i] = how many "body widths" body i would cross in dt
         travel = speeds * dt  # (N,)
@@ -404,6 +418,9 @@ class PhysicsSystem(System):
         threshold, run a swept segment query and clamp its position to the
         first external hit.
 
+        P-OPT-3/4: Reuses cached speeds from _compute_substeps and builds
+        a fast-index to skip slow bodies entirely rather than iterating all.
+
         This runs *before* ``space.step(sub_dt)`` so pymunk detects the
         near-contact naturally and generates proper impulse response.
         """
@@ -416,26 +433,31 @@ class PhysicsSystem(System):
         _sqrt = math.sqrt
         segment_query = self.space.segment_query
         soft_ids = self._soft_body_bodies
+        extents_list = self._ccd_extents_list
 
+        # P-OPT-4: Build fast-index — only iterate bodies exceeding trigger.
+        # Use cached speeds from _compute_substeps when available.
+        cached_speeds = getattr(self, '_ccd_speeds', None)
+        fast_indices: list[int] = []
         for i in range(n):
             body = self._ccd_bodies[i]
-
-            # Skip soft-body nodes (belt-and-suspenders; they shouldn't
-            # be in _ccd_bodies, but guard just in case).
             if id(body) in soft_ids:
                 continue
+            if cached_speeds is not None:
+                speed = float(cached_speeds[i])
+            else:
+                v = body.velocity
+                speed = _sqrt(v.x * v.x + v.y * v.y)
+            travel = speed * sub_dt
+            if travel > extents_list[i] * trigger:
+                fast_indices.append(i)
+
+        # Only sweep bodies in the fast-index.
+        for i in fast_indices:
+            body = self._ccd_bodies[i]
+            extent = extents_list[i]
 
             v = body.velocity
-            speed = _sqrt(v.x * v.x + v.y * v.y)
-            extent = self._ccd_extents_list[i]
-            travel = speed * sub_dt
-
-            # Distance prune: only sweep bodies that travel a significant
-            # fraction of their extent in this substep.
-            if travel <= extent * trigger:
-                continue
-
-            # Start / end of the swept segment for this substep.
             px, py = body.position.x, body.position.y
             dx = v.x * sub_dt
             dy = v.y * sub_dt
@@ -525,15 +547,24 @@ class PhysicsSystem(System):
 
         P1-4: Uses the pre-built _sync_pairs list when available, falling
         back to the ECS query for entities registered before the optimisation.
+
+        P-OPT-5: Skips bodies whose position/angle haven't changed since last
+        sync (sleeping or stationary bodies).
         """
         if self._sync_pairs:
             for body, transform in self._sync_pairs:
+                bx = body.position.x
+                by = body.position.y
+                ba = body.angle
+                # P-OPT-5: Skip if position and angle unchanged.
+                if bx == transform.x and by == transform.y and ba == transform.angle:
+                    continue
                 transform.prev_x = transform.x
                 transform.prev_y = transform.y
                 transform.prev_angle = transform.angle
-                transform.x = body.position.x
-                transform.y = body.position.y
-                transform.angle = body.angle
+                transform.x = bx
+                transform.y = by
+                transform.angle = ba
         else:
             for entity in world.get_entities_with(Physics, Transform):
                 physics: Physics = entity.get_component(Physics)

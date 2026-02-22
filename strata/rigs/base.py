@@ -168,6 +168,7 @@ class Rig:
             return
         from strata.ecs.components import Physics
 
+        _batch_add: list = []  # P-OPT-12: collect for single space.add()
         for spec in self._specs:
             ea = spec.get('entity_a')
             eb = spec.get('entity_b')
@@ -191,18 +192,23 @@ class Rig:
 
             constraint = self._build_constraint(spec, body_a, body_b)
             if constraint is not None:
-                space.add(constraint)
+                _batch_add.append(constraint)
                 self._constraints.append(constraint)
                 handle: JointHandle = spec['_handle']
                 handle._attach(constraint)
+
+        # P-OPT-12: Single space.add() call for all constraints.
+        if _batch_add:
+            space.add(*_batch_add)
 
         self._registered = True
 
     def _unregister(self, space: pymunk.Space) -> None:
         """Remove all constraints built by _register() from the space."""
-        for c in self._constraints:
-            if c in space.constraints:
-                space.remove(c)
+        # P-OPT-12: Batch removal in single space.remove() call.
+        to_remove = [c for c in self._constraints if c in space.constraints]
+        if to_remove:
+            space.remove(*to_remove)
         self._constraints.clear()
         # Reset handles to unbuilt state.
         for spec in self._specs:

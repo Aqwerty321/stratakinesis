@@ -19,6 +19,9 @@ from strata.render.camera import Camera
 from strata.backend.array import xp
 from strata.config import WORLD_WIDTH, WORLD_HEIGHT
 
+# P-OPT-13: Use numpy directly for render-path arrays to avoid GPU↔CPU sync.
+import numpy as np
+
 
 # Background fill colour (letterbox bars + scene background).
 _BG_COLOUR = (15, 15, 20)
@@ -64,12 +67,14 @@ class RenderSystem(System):
         pygame.draw.rect(surface, _WORLD_BG_COLOUR, world_rect)
 
         # Draw each entity
+        # P-OPT-7: Cache surface dimensions once per frame.
+        surf_w, surf_h = surface.get_size()
         for entity in world.get_entities_with(Visual, Transform):
             visual: Visual = entity.get_component(Visual)
             if visual.hidden:
                 continue
             transform: Transform = entity.get_component(Transform)
-            self._draw_entity(surface, camera, visual, transform, alpha, entity)
+            self._draw_entity(surface, camera, visual, transform, alpha, entity, surf_w, surf_h)
 
     # ------------------------------------------------------------------
     # Internal drawing helpers
@@ -83,6 +88,8 @@ class RenderSystem(System):
         transform: Transform,
         alpha: float = 1.0,
         entity=None,
+        surf_w: int = 0,
+        surf_h: int = 0,
     ) -> None:
         # Build an interpolated transform for rendering — never mutates the real one
         rx = transform.prev_x + alpha * (transform.x - transform.prev_x)
@@ -90,17 +97,17 @@ class RenderSystem(System):
         # Shortest-path angle lerp to avoid ±π wrap artifacts
         ra = _lerp_angle(transform.prev_angle, transform.angle, alpha)
         if visual.shape_type == "circle":
-            self._draw_circle(surface, camera, visual, rx, ry, ra)
+            self._draw_circle(surface, camera, visual, rx, ry, ra, surf_w, surf_h)
         elif visual.shape_type == "image":
-            self._draw_image(surface, camera, visual, rx, ry, ra)
+            self._draw_image(surface, camera, visual, rx, ry, ra, surf_w, surf_h)
         elif visual.shape_type == "soft_polygon":
             soft = entity.get_component(SoftBody) if entity is not None else None
             if soft is not None and soft.debug_render:
                 self._draw_soft_debug(surface, camera, soft, rx, ry)
             else:
-                self._draw_soft_polygon(surface, camera, visual, rx, ry)
+                self._draw_soft_polygon(surface, camera, visual, rx, ry, surf_w, surf_h)
         else:
-            self._draw_polygon(surface, camera, visual, rx, ry, ra)
+            self._draw_polygon(surface, camera, visual, rx, ry, ra, surf_w, surf_h)
 
     def _draw_circle(
         self,
@@ -110,12 +117,16 @@ class RenderSystem(System):
         rx: float,
         ry: float,
         ra: float,
+        surf_w: int = 0,
+        surf_h: int = 0,
     ) -> None:
         cx, cy = camera.world_to_screen(rx, ry)
         r = camera.scale_length(visual.radius)
 
-        # Cull entities entirely outside the surface (prevents short overflow)
-        w, h = surface.get_size()
+        # P-OPT-7: Use pre-computed surface dimensions for culling.
+        w, h = surf_w, surf_h
+        if w == 0:
+            w, h = surface.get_size()
         if cx + r < 0 or cx - r > w or cy + r < 0 or cy - r > h:
             return
 
@@ -134,31 +145,55 @@ class RenderSystem(System):
         rx: float,
         ry: float,
         ra: float,
+        surf_w: int = 0,
+        surf_h: int = 0,
     ) -> None:
         if not visual.vertices:
             return
 
-        cos_a = math.cos(ra)
-        sin_a = math.sin(ra)
+        # P-OPT-8: Screen-space vertex cache — skip rotation + w2s when the
+        # entity transform and camera haven't changed (benefits static geometry).
+        cache_key = (rx, ry, ra, camera.scale, camera.offset_x, camera.offset_y)
+        cached = getattr(visual, '_screen_cache_key', None)
+        if cached == cache_key:
+            buf = visual._screen_cache_buf
+        else:
+            cos_a = math.cos(ra)
+            sin_a = math.sin(ra)
 
-        # P0-3: Batch rotation + world_to_screen via numpy.
-        verts = visual._verts_arr
-        if verts is None:
-            verts = xp.array(visual.vertices, dtype=xp.float64)
-            visual._verts_arr = verts
-        # Rotation matrix multiply: [cos -sin; sin cos] @ verts.T
-        rot = xp.array([[cos_a, -sin_a], [sin_a, cos_a]], dtype=xp.float64)
-        world = verts @ rot.T
-        world[:, 0] += rx
-        world[:, 1] += ry
-        screen = camera.world_to_screen_batch(world)  # (V, 2) int32
-        buf = screen.tolist()
+            # P0-3: Batch rotation + world_to_screen via numpy.
+            verts = visual._verts_arr
+            if verts is None:
+                verts = np.array(visual.vertices, dtype=np.float64)
+                visual._verts_arr = verts
+            else:
+                # P-OPT-13: Ensure numpy (not cupy) for render path.
+                verts = np.asarray(verts)
+
+            # P-OPT-6: Direct scalar rotation — avoids allocating a 2×2 rotation
+            # matrix per entity per frame.  Uses in-place buffer to eliminate
+            # the matrix multiply allocation as well.
+            if not hasattr(visual, '_world_buf') or visual._world_buf.shape[0] != verts.shape[0]:
+                visual._world_buf = np.empty((verts.shape[0], 2), dtype=np.float64)
+            world = visual._world_buf
+            vx = verts[:, 0]
+            vy = verts[:, 1]
+            world[:, 0] = vx * cos_a - vy * sin_a + rx
+            world[:, 1] = vx * sin_a + vy * cos_a + ry
+            screen = camera.world_to_screen_batch(world)  # (V, 2) int32
+            buf = screen.tolist()
+            # Store in cache.
+            visual._screen_cache_key = cache_key
+            visual._screen_cache_buf = buf
 
         if len(buf) < 3:
             return
 
         # Cull if all vertices are outside the surface bounds
-        w, h = surface.get_size()
+        # P-OPT-7: Use pre-computed surface dimensions.
+        w, h = surf_w, surf_h
+        if w == 0:
+            w, h = surface.get_size()
         if all(sx < 0 or sx > w or sy < 0 or sy > h for sx, sy in buf):
             return
 
@@ -175,6 +210,8 @@ class RenderSystem(System):
         rx: float,
         ry: float,
         ra: float,
+        surf_w: int = 0,
+        surf_h: int = 0,
     ) -> None:
         """Blit an image surface aligned to the entity's Transform."""
         if visual.image_surface is None:
@@ -193,15 +230,30 @@ class RenderSystem(System):
             visual._cached_image_size = (pw, ph)
 
         # Rotate (pygame rotates CCW, pymunk angles are CCW-positive, so negate).
+        # P-OPT-9: Quantize to 1° buckets and cache rotated surfaces.  Most
+        # sprites change angle smoothly; 1° granularity is imperceptible but
+        # avoids calling pygame.transform.rotate 180×/frame at 180 sprites.
         angle_deg = -math.degrees(ra)
-        rotated = pygame.transform.rotate(cached, angle_deg)
+        quantized = round(angle_deg) % 360
+
+        rot_cache = getattr(visual, '_rot_cache', None)
+        rot_cache_key = getattr(visual, '_rot_cache_key', None)
+        if rot_cache is not None and rot_cache_key == (quantized, pw, ph):
+            rotated = rot_cache
+        else:
+            rotated = pygame.transform.rotate(cached, angle_deg)
+            visual._rot_cache = rotated
+            visual._rot_cache_key = (quantized, pw, ph)
 
         # Position: centre of the rotated surface at the screen coordinates.
         cx, cy = camera.world_to_screen(rx, ry)
         rect = rotated.get_rect(center=(cx, cy))
 
         # Cull
-        w, h = surface.get_size()
+        # P-OPT-7: Use pre-computed surface dimensions.
+        w, h = surf_w, surf_h
+        if w == 0:
+            w, h = surface.get_size()
         if rect.right < 0 or rect.left > w or rect.bottom < 0 or rect.top > h:
             return
 
@@ -214,24 +266,37 @@ class RenderSystem(System):
         visual: Visual,
         rx: float,
         ry: float,
+        surf_w: int = 0,
+        surf_h: int = 0,
     ) -> None:
         """Draw soft body mesh — vertices are centroid-relative, no rotation."""
         if not visual.vertices or len(visual.vertices) < 3:
             return
 
-        # P1-1: Batch world_to_screen via numpy (no rotation for soft bodies).
+        # P-OPT-2: _verts_arr is now kept canonical by SoftBodySystem —
+        # no need to rebuild from visual.vertices each frame.
         verts = visual._verts_arr
         if verts is None:
-            verts = xp.array(visual.vertices, dtype=xp.float64)
-        # Offset to world position (centroid).
-        world = verts.copy()
-        world[:, 0] += rx
-        world[:, 1] += ry
+            verts = np.array(visual.vertices, dtype=np.float64)
+            visual._verts_arr = verts
+        else:
+            # P-OPT-13: Ensure numpy for render path.
+            verts = np.asarray(verts)
+        # Offset to world position (centroid) — use pre-allocated buffer
+        # to avoid .copy() allocation every frame.
+        if not hasattr(visual, '_soft_world_buf') or visual._soft_world_buf.shape[0] != verts.shape[0]:
+            visual._soft_world_buf = np.empty((verts.shape[0], 2), dtype=np.float64)
+        world = visual._soft_world_buf
+        world[:, 0] = verts[:, 0] + rx
+        world[:, 1] = verts[:, 1] + ry
         screen = camera.world_to_screen_batch(world)  # (V, 2) int32
         buf = screen.tolist()
 
         # Cull if entirely off-screen
-        w, h = surface.get_size()
+        # P-OPT-7: Use pre-computed surface dimensions.
+        w, h = surf_w, surf_h
+        if w == 0:
+            w, h = surface.get_size()
         if all(sx < 0 or sx > w or sy < 0 or sy > h for sx, sy in buf):
             return
 
@@ -261,7 +326,7 @@ class RenderSystem(System):
 
         # Collect spring endpoints as (N_springs, 4) [ax, ay, bx, by]
         if n_springs > 0:
-            endpoints = xp.empty((n_springs, 4), dtype=xp.float64)
+            endpoints = np.empty((n_springs, 4), dtype=np.float64)
             for i, spring in enumerate(soft.springs):
                 ap = spring.a.position
                 bp = spring.b.position
@@ -276,7 +341,7 @@ class RenderSystem(System):
                 draw_line(surface, spring_rgb, a_screen[i], b_screen[i], 1)
 
         # Batch-transform node positions
-        node_pos = xp.empty((n_nodes, 2), dtype=xp.float64)
+        node_pos = np.empty((n_nodes, 2), dtype=np.float64)
         for i, body in enumerate(soft.nodes):
             node_pos[i, 0] = body.position.x
             node_pos[i, 1] = body.position.y
