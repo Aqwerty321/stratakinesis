@@ -111,6 +111,10 @@ class PhysicsSystem(System):
         # shape → entity ID; populated in register()
         self._shape_to_entity: dict[pymunk.Shape, int] = {}
 
+        # Tracks entity IDs that have already been registered to prevent
+        # duplicate entries in tracking lists on re-add.
+        self._registered_entities: set[int] = set()
+
         # Collision event buffers; drained by Game after each physics step.
         self._begin_events: list[CollisionEvent] = []
         self._end_events: list[CollisionEvent] = []
@@ -166,15 +170,24 @@ class PhysicsSystem(System):
             self._static_body = pymunk.Body(body_type=pymunk.Body.STATIC)
         return self._static_body
 
-    def register(self, physics: Physics, entity_id: int = -1) -> None:
+    def register(self, physics: Physics, entity_id: int = -1, *,
+                 transform: "Transform | None" = None) -> None:
         """Add a Physics component's body and shape to the pymunk space.
+
+        Idempotent: calling register() again for the same entity_id is a no-op
+        (the body/shape are already in the space and tracking lists).
 
         Parameters
         ----------
         physics   : the Physics component to register.
         entity_id : the ECS entity ID; stored for collision-event lookup.
                     Defaults to -1 (unregistered) for backward compatibility.
+        transform : optional Transform for building _sync_pairs.
         """
+        # Guard against duplicate registration of the same entity.
+        if entity_id >= 0 and entity_id in self._registered_entities:
+            return
+
         if physics.body is not None and physics.body not in self.space.bodies:
             self.space.add(physics.body)
         if physics.shape is not None and physics.shape not in self.space.shapes:
@@ -203,6 +216,55 @@ class PhysicsSystem(System):
                     self._ccd_shapes.append(physics.shape)
                     self._ccd_extents_list.append(extent)
                     self._ccd_dirty = True
+
+            # P1-4: build sync pair for transform sync after each step.
+            if transform is not None:
+                self._sync_pairs.append((physics.body, transform))
+
+        if entity_id >= 0:
+            self._registered_entities.add(entity_id)
+
+    def unregister(self, physics: Physics, entity_id: int = -1) -> None:
+        """Remove a Physics component's body and shape from the pymunk space.
+
+        Cleans up all tracking lists (_damped_bodies, _sync_pairs, CCD lists,
+        _shape_to_entity) so removing an entity fully detaches it from the
+        physics simulation.
+        """
+        if physics.shape is not None and physics.shape in self.space.shapes:
+            self.space.remove(physics.shape)
+            self._shape_to_entity.pop(physics.shape, None)
+
+        if physics.body is not None and physics.body not in (
+            self.space.static_body, self._static_body
+        ) and physics.body in self.space.bodies:
+            self.space.remove(physics.body)
+
+        # Remove from damped list.
+        if physics.body is not None:
+            self._damped_bodies = [
+                (b, ld, ad) for b, ld, ad in self._damped_bodies
+                if b is not physics.body
+            ]
+
+        # Remove from sync pairs.
+        self._sync_pairs = [
+            (b, t) for b, t in self._sync_pairs if b is not physics.body
+        ]
+
+        # Remove from CCD tracking.
+        if physics.body is not None:
+            try:
+                idx = self._ccd_bodies.index(physics.body)
+                self._ccd_bodies.pop(idx)
+                self._ccd_shapes.pop(idx)
+                self._ccd_extents_list.pop(idx)
+                self._ccd_dirty = True
+            except ValueError:
+                pass
+
+        if entity_id >= 0:
+            self._registered_entities.discard(entity_id)
 
     # ------------------------------------------------------------------
     # Collision event draining (called by Game.run() / Game.step())

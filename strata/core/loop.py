@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import gc
 import os
-import sys
 import math
 import time
 from typing import Callable
@@ -82,15 +81,10 @@ class Scene(World):
         if self._physics_system is not None:
             phys = entity.get_component(_Physics)
             if phys is not None:
-                self._physics_system.register(phys, entity.id)
-                # P1-4: populate sync pairs for dynamic bodies.
-                if not phys.is_static and phys.body is not None:
-                    from strata.ecs.components import Transform
-                    transform = entity.get_component(Transform)
-                    if transform is not None:
-                        self._physics_system._sync_pairs.append(
-                            (phys.body, transform)
-                        )
+                # P1-4: sync pairs are populated inside register() now.
+                from strata.ecs.components import Transform
+                transform = entity.get_component(Transform)
+                self._physics_system.register(phys, entity.id, transform=transform)
         if self._soft_body_system is not None:
             soft = entity.get_component(_SoftBody)
             if soft is not None:
@@ -123,6 +117,28 @@ class Scene(World):
         if self._physics_system is not None:
             rig._register(self._physics_system.space,
                           self._physics_system.static_body)
+
+    def remove_entity(self, entity: Entity) -> None:
+        """Remove an entity from the scene, cleaning up physics and soft-body state."""
+        # Unregister rigid-body physics.
+        if self._physics_system is not None:
+            phys = entity.get_component(_Physics)
+            if phys is not None:
+                self._physics_system.unregister(phys, entity.id)
+                # Remove from sync pairs that reference the entity's Transform.
+                from strata.ecs.components import Transform
+                transform = entity.get_component(Transform)
+                if transform is not None:
+                    self._physics_system._sync_pairs = [
+                        (b, t) for b, t in self._physics_system._sync_pairs
+                        if t is not transform
+                    ]
+        # Unregister soft-body physics.
+        if self._soft_body_system is not None:
+            soft = entity.get_component(_SoftBody)
+            if soft is not None:
+                self._soft_body_system.unregister(soft, entity.id)
+        super().remove_entity(entity)
 
 
 class Game:
@@ -342,8 +358,9 @@ class Game:
                 accumulator -= FIXED_DT
                 sim_time += FIXED_DT
                 physics_steps_this_frame += 1
-            # Drop events that fell past the last step boundary
-            self.input.clear()
+            # Expire events that fell past the last step boundary;
+            # keep events timestamped >= sim_time for the next frame.
+            self.input.expire(sim_time)
 
             # --- Render (pass alpha for sub-step interpolation) ---
             alpha = accumulator / FIXED_DT
@@ -359,7 +376,6 @@ class Game:
 
         gc.enable()   # restore GC on clean exit
         pygame.quit()
-        sys.exit(0)
 
     # ------------------------------------------------------------------
     # F3 debug overlay

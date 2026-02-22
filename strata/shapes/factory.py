@@ -204,6 +204,8 @@ class Sprite:
         static: bool = False,
         color: tuple[int, ...] = _DEFAULT_POLYGON_COLOR,
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
+        linear_damping: float = 1.0,
+        angular_damping: float = 1.0,
     ) -> Entity:
         """Create a convex polygon sprite.
 
@@ -217,6 +219,8 @@ class Sprite:
         density  : mass per unit area (kg / world_unit²).
         physics  : if True, attach a dynamic pymunk body.
         static   : if True, create a static pymunk body (overrides physics=True).
+        linear_damping  : per-step linear velocity multiplier (0..1). 1.0 = no decay.
+        angular_damping : per-step angular velocity multiplier (0..1). 1.0 = no decay.
         """
         if len(vertices) < 3:
             raise ValueError(
@@ -255,7 +259,8 @@ class Sprite:
             shape.friction = 0.8
 
             entity.add_component(
-                Physics(body=body, shape=shape, density=density, is_static=static)
+                Physics(body=body, shape=shape, density=density, is_static=static,
+                        linear_damping=linear_damping, angular_damping=angular_damping,)
             )
 
         return entity

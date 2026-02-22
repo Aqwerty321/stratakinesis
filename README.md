@@ -8,6 +8,7 @@ pygame-ce for rendering · pymunk for physics · numpy / cupy for batch math.
 ## What it does
 
 - **Deterministic physics** — fixed-timestep accumulator, never variable dt. Same inputs = same simulation, every time.
+- **Continuous collision detection** — adaptive substep CCD prevents fast objects from tunnelling through thin walls.
 - **Rig assembly system** — six production-ready rigs out of the box: `PendulumRig`, `ChainRig`, `RopeRig`, `GearTrainRig`, `LeverRig`, `HingeMotorRig`. Drop them into a scene with one call.
 - **Soft bodies** — spring-mass meshes with structural/shear/bending tiers, pressure simulation, and COM correction. Deform, squish, bounce.
 - **Minimal ECS** — Entity (int ID + component dict), World/Scene, ordered systems pipeline. No magic. No global state.
@@ -128,13 +129,15 @@ strata/
     components.py          # Transform, Physics, Visual, SoftBody, PropertyBinding
     world.py               # World (entity registry + systems)
   systems/
-    physics_system.py      # pymunk.Space, fixed-step, per-body damping, transform sync
+    base.py                # System base class
+    physics_system.py      # pymunk.Space, fixed-step, CCD, per-body damping, transform sync
     soft_body_system.py    # spring-mass registration, velocity func, COM correction
     render_system.py       # gfxdraw, interpolation, viewport culling
-    rig_system.py          # constraint assembly + PropertyBinding mirroring
     binding_system.py      # PropertyBinding mirroring
   render/camera.py         # scale-to-fit, world_to_screen, screen_to_world
-  shapes/factory.py        # Sprite.circle/rect/polygon/soft_circle/soft_rect
+  shapes/
+    factory.py             # Sprite.circle/rect/polygon/soft_circle/soft_rect
+    mesh.py                # Mesh generation (circle, rect, polygon vertex arrays)
   rigs/
     base.py                # Rig + JointHandle (constraint spec → pymunk)
     pendulum.py            # PendulumRig
@@ -150,11 +153,12 @@ examples/
   demo_joints.py           # All six rigs in one scene
   demo_soft_body.py        # Soft-body meshes
   demo_collisions.py       # Collision callbacks
+  demo_ccd.py              # Continuous collision detection
   demo_soft_collisions.py  # Soft body + rigid collisions
-tests/                     # 163 tests
+tests/                     # 251 tests
 ```
 
-46 Python files · ~6 400 LOC · 163 tests
+51 Python files · ~8 500 LOC · 251 tests · 7 demos
 
 ---
 
@@ -217,7 +221,7 @@ tests/                     # 163 tests
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy .venv/bin/pytest tests/ -q
 ```
 
-163 passing. Covers: accumulator determinism, ECS CRUD, camera math, physics sync, rig constraint assembly, soft-body registration, input buffer delivery, collision events, hook wiring.
+251 passing. Covers: accumulator determinism, ECS CRUD, camera math, physics sync, CCD, rig constraint assembly, soft-body registration, mesh generation, input buffer delivery, collision events, hook wiring, entity lifecycle, damping API.
 
 ---
 

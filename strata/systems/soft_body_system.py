@@ -64,6 +64,8 @@ class SoftBodySystem(System):
         self._registered: set[int] = set()
         # Track soft bodies for per-substep COM correction.
         self._soft_bodies: list[SoftBody] = []
+        # Cache of last-seen substep count for damping recomputation.
+        self._last_substeps: int = getattr(physics_system, 'substeps', 1)
         # Register a post-substep hook so COM correction runs every
         # space.step(), not just once per frame.
         physics_system._post_substep_hooks.append(self._post_substep_com_correct)
@@ -89,8 +91,8 @@ class SoftBodySystem(System):
         space = self._physics.space
 
         # Per-substep damping factor derived from the component's velocity_damping.
-        # Stored on the SoftBody instance so the post-substep hook can read it
-        # without rebuilding the closure on every substep.
+        # Recomputed dynamically in _post_substep_com_correct when the substep
+        # count changes (adaptive CCD), so stored as the base damping here.
         substeps = getattr(self._physics, 'substeps', 1)
         soft._vel_damp = soft.velocity_damping ** (1.0 / substeps)
 
@@ -165,6 +167,15 @@ class SoftBodySystem(System):
         every node the same downward acceleration and zeroing COM-Y would
         make the body float.
         """
+        # Recompute per-substep damping factor when substep count changes
+        # (adaptive CCD). This keeps damping behavior correct regardless of
+        # how many substeps the physics system decided to use this frame.
+        current_substeps = getattr(self._physics, 'substeps', 1)
+        if current_substeps != self._last_substeps:
+            self._last_substeps = current_substeps
+            for soft in self._soft_bodies:
+                soft._vel_damp = soft.velocity_damping ** (1.0 / current_substeps)
+
         for soft in self._soft_bodies:
             nodes = soft.nodes
             n = len(nodes)

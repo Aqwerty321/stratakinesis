@@ -52,20 +52,30 @@ class World:
     # ------------------------------------------------------------------
 
     def add_entity(self, entity: Entity) -> Entity:
-        """Register an entity and return it (for chaining)."""
+        """Register an entity and return it (for chaining).
+
+        Idempotent: if the entity is already registered, this is a no-op.
+        """
+        if entity.id in self._entity_by_id:
+            return entity
         self._entities.append(entity)
         self._index_entity(entity)
         return entity
 
     def add_entities(self, *entities: Entity) -> None:
-        """Register multiple entities at once."""
+        """Register multiple entities at once (idempotent per entity)."""
         for entity in entities:
+            if entity.id in self._entity_by_id:
+                continue
             self._entities.append(entity)
             self._index_entity(entity)
 
     def remove_entity(self, entity: Entity) -> None:
-        """Deregister an entity (does not clean up physics bodies — caller's responsibility)."""
-        self._entities.remove(entity)
+        """Deregister an entity.  Subclasses (Scene) handle physics cleanup."""
+        try:
+            self._entities.remove(entity)
+        except ValueError:
+            return
         self._unindex_entity(entity)
 
     def get_entity_by_id(self, entity_id: int) -> "Entity | None":
@@ -104,7 +114,10 @@ class World:
                     break
             else:
                 byid = self._entity_by_id
-                result = [byid[eid] for eid in common if eid in byid]
+                result = sorted(
+                    [byid[eid] for eid in common if eid in byid],
+                    key=lambda e: e.id,
+                )
         self._query_cache[component_types] = result
         return result
 

@@ -113,6 +113,16 @@ class InputBuffer:
         """
         self._pending.clear()
 
+    def expire(self, before: float) -> None:
+        """Discard events with timestamps strictly before *before*.
+
+        Events timestamped >= *before* are kept for future physics steps.
+        This prevents unconsumed events (e.g. when the frame had no physics
+        steps) from being lost.
+        """
+        while self._pending and self._pending[0].timestamp < before:
+            self._pending.popleft()
+
     # ------------------------------------------------------------------
     # Key-state API
     # ------------------------------------------------------------------
