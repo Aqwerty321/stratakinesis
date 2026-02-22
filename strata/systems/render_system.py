@@ -91,6 +91,8 @@ class RenderSystem(System):
         ra = _lerp_angle(transform.prev_angle, transform.angle, alpha)
         if visual.shape_type == "circle":
             self._draw_circle(surface, camera, visual, rx, ry, ra)
+        elif visual.shape_type == "image":
+            self._draw_image(surface, camera, visual, rx, ry, ra)
         elif visual.shape_type == "soft_polygon":
             soft = entity.get_component(SoftBody) if entity is not None else None
             if soft is not None and soft.debug_render:
@@ -164,6 +166,46 @@ class RenderSystem(System):
         pygame.gfxdraw.filled_polygon(surface, buf, visual.color)
         if visual.outline is not None:
             pygame.gfxdraw.aapolygon(surface, buf, visual.outline)
+
+    def _draw_image(
+        self,
+        surface: pygame.Surface,
+        camera: Camera,
+        visual: Visual,
+        rx: float,
+        ry: float,
+        ra: float,
+    ) -> None:
+        """Blit an image surface aligned to the entity's Transform."""
+        if visual.image_surface is None:
+            return
+
+        # Scale the original image to the correct world-unit size in pixels.
+        pw = max(1, int(visual.image_width * camera.scale))
+        ph = max(1, int(visual.image_height * camera.scale))
+
+        # Cache the scaled surface (keyed by pixel dimensions).
+        cached = getattr(visual, '_cached_image', None)
+        cached_size = getattr(visual, '_cached_image_size', (0, 0))
+        if cached is None or cached_size != (pw, ph):
+            cached = pygame.transform.smoothscale(visual.image_surface, (pw, ph))
+            visual._cached_image = cached
+            visual._cached_image_size = (pw, ph)
+
+        # Rotate (pygame rotates CCW, pymunk angles are CCW-positive, so negate).
+        angle_deg = -math.degrees(ra)
+        rotated = pygame.transform.rotate(cached, angle_deg)
+
+        # Position: centre of the rotated surface at the screen coordinates.
+        cx, cy = camera.world_to_screen(rx, ry)
+        rect = rotated.get_rect(center=(cx, cy))
+
+        # Cull
+        w, h = surface.get_size()
+        if rect.right < 0 or rect.left > w or rect.bottom < 0 or rect.top > h:
+            return
+
+        surface.blit(rotated, rect)
 
     def _draw_soft_polygon(
         self,

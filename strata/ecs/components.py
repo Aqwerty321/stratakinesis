@@ -86,13 +86,20 @@ class Visual(Component):
                 Always stored internally as a 4-tuple (or None) after construction.
     `hidden`  — when True, RenderSystem skips this entity.  Use for entities
                 whose visuals are fully managed by a rig's own draw() call.
+    `image_surface` — optional pygame.Surface for image-based rendering.
+                Loaded by Sprite.image() and blitted aligned to body Transform.
+    `image_width`   — width of the image in world units (used for scaling).
+    `image_height`  — height of the image in world units.
     """
-    shape_type: str = "polygon"   # "circle" | "polygon"
+    shape_type: str = "polygon"   # "circle" | "polygon" | "image"
     radius: float = 0.0           # used only when shape_type == "circle"
     vertices: list[tuple[float, float]] = field(default_factory=list)
     color: tuple[int, ...] = (100, 180, 255, 255)
     outline: tuple[int, ...] | None = (255, 255, 255, 200)
     hidden: bool = False
+    image_surface: Any = field(default=None, repr=False)
+    image_width: float = 0.0
+    image_height: float = 0.0
 
     def __post_init__(self) -> None:
         # Normalise to 4-tuple RGBA so RenderSystem never needs a len() check.

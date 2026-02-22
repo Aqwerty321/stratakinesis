@@ -15,6 +15,10 @@ pygame-ce for rendering · pymunk for physics · numpy / cupy for batch math.
 - **Render interpolation** — sub-step alpha lerp with shortest-path angle interpolation so motion is silky at any frame rate.
 - **Timestamped input buffer** — events are stamped with `time.monotonic()` and delivered to the exact physics step they belong to.
 - **Per-body damping** — `linear_damping` / `angular_damping` on every `Physics` body. Pendulums decay naturally. No global drag hacks.
+- **Named collision groups** — `group="player"`, `collides_with="enemy"` — readable string-based filtering instead of raw bitmasks.
+- **Sprite.image(path)** — blit a loaded image aligned to body Transform with auto aspect ratio and optional physics collision.
+- **Constraint visualiser** — `show_constraints=True` overlays every pymunk joint as a coloured debug shape: springs as zigzags, gears as dotted lines, pins/pivots as circles.
+- **Scene serialisation** — `game.save_scene(path)` / `game.load_scene(path)` — full round-trip JSON save/load of entities, components, physics state, and gravity.
 - **Hook API** — `on_event`, `on_update`, `on_fixed_update`, `on_draw`. Zero subclassing. Assign a function and go.
 - **F3 debug overlay** — FPS, entity count, physics steps, gravity, vsync status, platform info.
 - **WSL-aware** — auto-detects WSLg, disables vsync, caps at 240 fps.
@@ -117,13 +121,15 @@ All hooks are optional callables. Assign or leave `None`.
 
 ```
 strata/
-  __init__.py              # exports: Game, Sprite
+  __init__.py              # exports: Game, Sprite, CollisionGroups
   config.py                # WORLD_WIDTH/HEIGHT, FIXED_DT, MAX_FRAME_TIME
   backend/array.py         # xp = cupy | numpy
   core/
     clock.py               # Clock: tick() + fps
+    collision_groups.py    # Named collision group → bitmask registry
     input_buffer.py        # StampedEvent, InputBuffer
     loop.py                # Game, Scene, run loop, hooks, F3 overlay
+    serialise.py           # save_scene / load_scene (JSON round-trip)
   ecs/
     entity.py              # Entity (int ID + component dict)
     components.py          # Transform, Physics, Visual, SoftBody, PropertyBinding
@@ -132,11 +138,12 @@ strata/
     base.py                # System base class
     physics_system.py      # pymunk.Space, fixed-step, CCD, per-body damping, transform sync
     soft_body_system.py    # spring-mass registration, velocity func, COM correction
-    render_system.py       # gfxdraw, interpolation, viewport culling
+    render_system.py       # gfxdraw, interpolation, viewport culling, image blitting
     binding_system.py      # PropertyBinding mirroring
+    debug_draw.py          # Constraint visualiser overlay
   render/camera.py         # scale-to-fit, world_to_screen, screen_to_world
   shapes/
-    factory.py             # Sprite.circle/rect/polygon/soft_circle/soft_rect
+    factory.py             # Sprite.circle/rect/polygon/image/soft_circle/soft_rect
     mesh.py                # Mesh generation (circle, rect, polygon vertex arrays)
   rigs/
     base.py                # Rig + JointHandle (constraint spec → pymunk)
@@ -155,10 +162,10 @@ examples/
   demo_collisions.py       # Collision callbacks
   demo_ccd.py              # Continuous collision detection
   demo_soft_collisions.py  # Soft body + rigid collisions
-tests/                     # 251 tests
+tests/                     # 300 tests
 ```
 
-51 Python files · ~8 500 LOC · 251 tests · 7 demos
+55 Python files · ~10 100 LOC · 300 tests · 7 demos
 
 ---
 

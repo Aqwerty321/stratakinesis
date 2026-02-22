@@ -25,7 +25,7 @@ Make deterministic, physics-driven 2D game systems as simple to use as Scratch o
 
 ---
 
-## Where We Are (v0.4 — current)
+## Where We Are (v0.5 — current)
 
 Delivered and tested:
 
@@ -33,7 +33,7 @@ Delivered and tested:
 - Minimal ECS: Entity (int ID + component dict), World, Scene, ordered Systems pipeline
 - PhysicsSystem — pymunk space, fixed-step substeps, per-body `linear_damping` + `angular_damping`, Transform sync
 - SoftBodySystem — spring-mass meshes (structural/shear/bending tiers), pressure, COM correction per substep
-- RenderSystem — pygame-ce gfxdraw, anti-aliased filled polygons, render interpolation, viewport culling
+- RenderSystem — pygame-ce gfxdraw, anti-aliased filled polygons, render interpolation, viewport culling, image blitting
 - **Rig assembly system** — six production-ready rigs: `PendulumRig`, `ChainRig`, `RopeRig`, `GearTrainRig`, `LeverRig`, `HingeMotorRig`
 - Parametric gear tooth rendering — trapezoidal teeth via `gfxdraw`, meshing-correct phase alignment
 - `on_draw` hook — custom gfxdraw overlays after scene render, before F3 overlay
@@ -41,7 +41,11 @@ Delivered and tested:
 - Timestamped `InputBuffer` with per-physics-step event delivery (`on_fixed_update`)
 - Hook API: `on_event`, `on_update`, `on_fixed_update`, `on_draw` — zero subclassing
 - WSL/WSLg auto-detection, manual GC scheduling, F3 debug overlay
-- **51 Python files · ~8 500 LOC · 251 tests · 7 demos**
+- **Named collision groups** — string-based collision filtering (`group="player"`, `collides_with=["enemy","wall"]`)
+- **`Sprite.image(path)`** — load and blit images aligned to body transform with auto aspect ratio
+- **Constraint visualiser** — `show_constraints=True` debug overlay for all pymunk joint types
+- **Scene serialisation** — `game.save_scene()` / `game.load_scene()` — full JSON round-trip of entities, components, and physics state
+- **55 Python files · ~10 100 LOC · 300 tests · 7 demos**
 
 ---
 
@@ -82,11 +86,11 @@ Dependency direction: SDK → Editor → Plugins → Core → Backend. Never rev
 ## Roadmap
 
 ### v0.5 — Scene Serialisation & Skeletal Rigs
-- **Scene serialisation** — save/load every entity, rig, and constraint to/from JSON. Deserialise back to a running simulation in one call. Unlocks level editors, hot-reload, and replay files.
-- **Constraint visualiser** — `game.debug.show_constraints = True` draws every active pymunk constraint as a coloured overlay: pins as circles, springs as zigzags, gear joints as dotted arcs.
-- **Skeletal / articulated character rig** — `SkeletonRig` with a bone hierarchy, FK/IK solver, and pose interpolation. Gives you ragdolls, walkers, and procedural animation. Natural extension of `PendulumRig`.
-- **Named collision groups** — replace raw bitmasks with `shape.group = "player"` and filter by name.
-- **`Sprite.image(path)`** — blit a pygame surface aligned to body Transform. First step toward real asset pipelines.
+- ~~**Scene serialisation**~~ ✅ — save/load every entity and component to/from JSON. Deserialise back to a running simulation in one call.
+- ~~**Constraint visualiser**~~ ✅ — `show_constraints=True` draws every active pymunk constraint as a coloured overlay: pins as circles, springs as zigzags, gear joints as dotted arcs.
+- **Skeletal / articulated character rig** — `SkeletonRig` with a bone hierarchy, FK/IK solver, and pose interpolation. *(deferred to v0.6)*
+- ~~**Named collision groups**~~ ✅ — replace raw bitmasks with `group="player"` and filter by name.
+- ~~**`Sprite.image(path)`**~~ ✅ — blit a pygame surface aligned to body Transform. First step toward real asset pipelines.
 
 ### v0.6 — Visual Effects & Camera
 - **Trail renderer** — store N previous body positions, draw fading line segments behind fast objects.

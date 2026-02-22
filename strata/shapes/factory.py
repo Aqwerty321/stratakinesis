@@ -13,6 +13,43 @@ import pymunk
 from strata.ecs.entity import Entity
 from strata.ecs.components import Transform, Physics, Visual, SoftBody
 from strata.shapes.mesh import Mesh
+from strata.core.collision_groups import CollisionGroups
+
+
+# Singleton CollisionGroups registry — shared across all Sprite calls.
+# Game.groups points to this same instance and can be used to query/allocate.
+_collision_groups = CollisionGroups()
+
+
+def _resolve_collision(group, collides_with):
+    """Convert string group/collides_with to bitmask layer/mask.
+
+    Parameters
+    ----------
+    group : str | None
+        Named collision group for this shape's *layer*.
+    collides_with : str | list[str] | None
+        Named groups this shape should collide with (*mask*).
+
+    Returns
+    -------
+    (int, int) : (collision_layer, collision_mask)
+    """
+    if group is not None:
+        layer = _collision_groups.get(group)
+    else:
+        layer = 0xFFFF
+
+    if collides_with is not None:
+        if isinstance(collides_with, str):
+            collides_with = [collides_with]
+        mask = 0
+        for name in collides_with:
+            mask |= _collision_groups.get(name)
+    else:
+        mask = 0xFFFF
+
+    return layer, mask
 
 
 # Number of segments used to approximate a circle's visual polygon.
@@ -75,6 +112,8 @@ class Sprite:
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
         linear_damping: float = 1.0,
         angular_damping: float = 1.0,
+        group: str | None = None,
+        collides_with: str | list[str] | None = None,
     ) -> Entity:
         """Create a circular sprite.
 
@@ -85,6 +124,8 @@ class Sprite:
         density : mass per unit area (kg / world_unit²). Used for physics mass.
         physics : if True, attach a dynamic pymunk body.
         static  : if True, create a static pymunk body (overrides physics=True).
+        group   : named collision group (e.g. ``"player"``).
+        collides_with : group name(s) this shape collides with.
         """
         entity = Entity()
 
@@ -119,9 +160,11 @@ class Sprite:
             shape.elasticity = 0.5
             shape.friction = 0.8
 
+            layer, mask = _resolve_collision(group, collides_with)
             entity.add_component(
                 Physics(
                     body=body, shape=shape, density=density, is_static=static,
+                    collision_layer=layer, collision_mask=mask,
                     linear_damping=linear_damping, angular_damping=angular_damping,
                 )
             )
@@ -141,6 +184,8 @@ class Sprite:
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
         linear_damping: float = 1.0,
         angular_damping: float = 1.0,
+        group: str | None = None,
+        collides_with: str | list[str] | None = None,
     ) -> Entity:
         """Create a rectangular sprite.
 
@@ -151,6 +196,8 @@ class Sprite:
         density       : mass per unit area. Used for physics mass.
         physics       : if True, attach a dynamic pymunk body.
         static        : if True, create a static pymunk body.
+        group         : named collision group (e.g. ``"player"``).
+        collides_with : group name(s) this shape collides with.
         """
         entity = Entity()
 
@@ -185,9 +232,11 @@ class Sprite:
             shape.elasticity = 0.3
             shape.friction = 0.9
 
+            layer, mask = _resolve_collision(group, collides_with)
             entity.add_component(
                 Physics(
                     body=body, shape=shape, density=density, is_static=static,
+                    collision_layer=layer, collision_mask=mask,
                     linear_damping=linear_damping, angular_damping=angular_damping,
                 )
             )
@@ -206,6 +255,8 @@ class Sprite:
         outline: tuple[int, ...] | None = _DEFAULT_OUTLINE,
         linear_damping: float = 1.0,
         angular_damping: float = 1.0,
+        group: str | None = None,
+        collides_with: str | list[str] | None = None,
     ) -> Entity:
         """Create a convex polygon sprite.
 
@@ -221,6 +272,8 @@ class Sprite:
         static   : if True, create a static pymunk body (overrides physics=True).
         linear_damping  : per-step linear velocity multiplier (0..1). 1.0 = no decay.
         angular_damping : per-step angular velocity multiplier (0..1). 1.0 = no decay.
+        group           : named collision group (e.g. ``"player"``).
+        collides_with   : group name(s) this shape collides with.
         """
         if len(vertices) < 3:
             raise ValueError(
@@ -258,9 +311,105 @@ class Sprite:
             shape.elasticity = 0.3
             shape.friction = 0.8
 
+            layer, mask = _resolve_collision(group, collides_with)
             entity.add_component(
                 Physics(body=body, shape=shape, density=density, is_static=static,
+                        collision_layer=layer, collision_mask=mask,
                         linear_damping=linear_damping, angular_damping=angular_damping,)
+            )
+
+        return entity
+
+    # ------------------------------------------------------------------
+    # Image sprite
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def image(
+        path: str,
+        width: float | None = None,
+        height: float | None = None,
+        x: float = 0.0,
+        y: float = 0.0,
+        density: float = 1.0,
+        physics: bool = True,
+        static: bool = False,
+        linear_damping: float = 1.0,
+        angular_damping: float = 1.0,
+        group: str | None = None,
+        collides_with: str | list[str] | None = None,
+    ) -> Entity:
+        """Create a sprite rendered from an image file.
+
+        The image is loaded once via ``pygame.image.load`` and blitted each
+        frame aligned to the body's Transform (position + rotation).
+
+        Parameters
+        ----------
+        path    : filesystem path to the image (PNG, JPG, BMP, etc.).
+        width   : width in world units.  If None, derived from image
+                  aspect ratio and *height* (or defaults to 1.0).
+        height  : height in world units.  If None, derived from *width*.
+        x, y    : initial world-space centre position.
+        density : mass per unit area.
+        physics : if True, attach a dynamic box-shaped pymunk body matching
+                  the image dimensions.
+        static  : if True, create a static pymunk body.
+        group   : named collision group.
+        collides_with : group name(s) this shape collides with.
+        """
+        import pygame as _pg
+
+        surf = _pg.image.load(path)
+        try:
+            if surf.get_alpha() is not None or surf.get_colorkey() is not None:
+                surf = surf.convert_alpha()
+            else:
+                surf = surf.convert()
+        except _pg.error:
+            pass  # headless / no display — keep unconverted surface
+
+        img_w, img_h = surf.get_size()
+        aspect = img_w / max(img_h, 1)
+
+        # Resolve world-unit dimensions
+        if width is None and height is None:
+            width = 1.0
+            height = width / aspect
+        elif width is None:
+            width = height * aspect  # type: ignore[operator]
+        elif height is None:
+            height = width / aspect
+
+        entity = Entity()
+        entity.add_component(Transform(x=x, y=y))
+        entity.add_component(Visual(
+            shape_type="image",
+            image_surface=surf,
+            image_width=width,
+            image_height=height,
+        ))
+
+        if physics or static:
+            area = width * height  # type: ignore[operator]
+            mass = density * area
+
+            if static:
+                body = pymunk.Body(body_type=pymunk.Body.STATIC)
+            else:
+                moment = pymunk.moment_for_box(mass, (width, height))
+                body = pymunk.Body(mass, moment)
+
+            body.position = (x, y)
+            shape = pymunk.Poly.create_box(body, (width, height))
+            shape.elasticity = 0.3
+            shape.friction = 0.8
+
+            layer, mask = _resolve_collision(group, collides_with)
+            entity.add_component(
+                Physics(body=body, shape=shape, density=density, is_static=static,
+                        collision_layer=layer, collision_mask=mask,
+                        linear_damping=linear_damping, angular_damping=angular_damping)
             )
 
         return entity

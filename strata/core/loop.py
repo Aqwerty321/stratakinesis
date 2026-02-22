@@ -19,6 +19,7 @@ import pygame
 
 from strata.config import FIXED_DT, MAX_FRAME_TIME
 from strata.core.clock import Clock
+from strata.core.collision_groups import CollisionGroups
 from strata.core.input_buffer import InputBuffer, StampedEvent
 from strata.ecs.world import World
 from strata.ecs.entity import Entity
@@ -28,6 +29,7 @@ from strata.systems.physics_system import PhysicsSystem, CollisionEvent
 from strata.systems.render_system import RenderSystem
 from strata.systems.binding_system import BindingSystem
 from strata.systems.soft_body_system import SoftBodySystem
+from strata.systems.debug_draw import draw_constraints
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +172,7 @@ class Game:
                          (default 0.02 world units).
     physics_ccd        : enable swept CCD + adaptive substeps (default True).
     physics_max_substeps : hard cap on adaptive substeps (default 32).
+    show_constraints : draw pymunk constraints as coloured debug overlays.
     """
 
     def __init__(
@@ -185,6 +188,7 @@ class Game:
         physics_slop: float = 0.02,
         physics_ccd: bool = True,
         physics_max_substeps: int = 32,
+        show_constraints: bool = False,
     ) -> None:
         pygame.init()
 
@@ -193,6 +197,7 @@ class Game:
         self._max_fps = max_fps
         self._vsync = vsync
         self._show_overlay = show_overlay
+        self.show_constraints: bool = show_constraints
 
         # Disable automatic GC — we collect manually once per second to avoid
         # random mid-frame pauses that cause perceived stutter.
@@ -263,6 +268,13 @@ class Game:
         # (surface, camera) so you can do custom pygame / gfxdraw calls.
         self.on_draw: Callable | None = None
 
+        # Named collision groups — shared registry for string-based layer/mask.
+        # Usage: game.groups.get("player") or Sprite.circle(..., group="player")
+        # Points to the same singleton used by Sprite factory so allocations
+        # made via game.groups are visible to Sprite and vice versa.
+        from strata.shapes.factory import _collision_groups
+        self.groups: CollisionGroups = _collision_groups
+
         # Input buffer — replaces pygame.event.get() inside run().
         # Access as game.input for key-polling and event history.
         self.input: InputBuffer = InputBuffer()
@@ -282,6 +294,28 @@ class Game:
         if self.on_collision_end:
             for ev in end_events:
                 self.on_collision_end(ev)
+
+    # ------------------------------------------------------------------
+    # Scene serialisation
+    # ------------------------------------------------------------------
+
+    def save_scene(self, path: str) -> None:
+        """Serialise the current scene to a JSON file.
+
+        Captures all entity components and physics state so the scene
+        can be restored with ``load_scene()``.
+        """
+        from strata.core.serialise import save_scene
+        save_scene(self.scene, self.physics, path)
+
+    def load_scene(self, path: str) -> None:
+        """Load a scene from a JSON file, replacing the current scene.
+
+        Clears all existing entities and rebuilds from the saved data.
+        Physics bodies, shapes, and constraints are recreated automatically.
+        """
+        from strata.core.serialise import load_scene
+        load_scene(self, path)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -367,6 +401,10 @@ class Game:
             self.scene.draw(self._surface, self.camera, alpha)
             if self.on_draw:
                 self.on_draw(self._surface, self.camera)
+
+            # --- Constraint debug overlay ---
+            if self.show_constraints:
+                draw_constraints(self._surface, self.camera, self.physics.space)
 
             # --- F3 overlay ---
             if self._show_overlay:
