@@ -228,12 +228,24 @@ class PhysicsSystem(System):
         """Remove a Physics component's body and shape from the pymunk space.
 
         Cleans up all tracking lists (_damped_bodies, _sync_pairs, CCD lists,
-        _shape_to_entity) so removing an entity fully detaches it from the
-        physics simulation.
+        _shape_to_entity) **and all constraints referencing the body** so
+        removing an entity fully detaches it from the physics simulation.
         """
         if physics.shape is not None and physics.shape in self.space.shapes:
             self.space.remove(physics.shape)
             self._shape_to_entity.pop(physics.shape, None)
+
+        # Remove all constraints that reference this body BEFORE removing
+        # the body itself.  This prevents leaked constraints from holding
+        # stale body references in the space.
+        if physics.body is not None:
+            body = physics.body
+            constraints_to_remove = [
+                c for c in list(self.space.constraints)
+                if c.a is body or c.b is body
+            ]
+            for c in constraints_to_remove:
+                self.space.remove(c)
 
         if physics.body is not None and physics.body not in (
             self.space.static_body, self._static_body

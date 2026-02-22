@@ -56,6 +56,12 @@ class PendulumRig(Rig):
         damping: float = 1.0,
     ) -> None:
         super().__init__()
+        if length < 1:
+            raise ValueError(f"PendulumRig requires length >= 1, got {length}")
+        if bob_radius <= 0:
+            raise ValueError(f"PendulumRig bob_radius must be positive, got {bob_radius}")
+        if density <= 0:
+            raise ValueError(f"PendulumRig density must be positive, got {density}")
         self.bobs: list = []
         self.anchor: tuple[float, float] = anchor
         self._bob_radius = bob_radius

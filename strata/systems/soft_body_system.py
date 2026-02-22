@@ -88,6 +88,10 @@ class SoftBodySystem(System):
         ``velocity_func`` that applies damping and speed clamping on
         *every* ``space.step()`` call, not just once per frame.
         """
+        # Guard against duplicate registration.
+        if entity_id >= 0 and entity_id in self._registered:
+            return
+
         space = self._physics.space
 
         # Per-substep damping factor derived from the component's velocity_damping.
@@ -143,6 +147,8 @@ class SoftBodySystem(System):
         for body in soft.nodes:
             if body in space.bodies:
                 space.remove(body)
+            # Clean up CCD soft-body exclusion set.
+            self._physics._soft_body_bodies.discard(id(body))
 
         self._registered.discard(entity_id)
         try:

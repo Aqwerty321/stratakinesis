@@ -54,6 +54,14 @@ class ChainRig(Rig):
         damping: float = 1.0,
     ) -> None:
         super().__init__()
+        if length < 1:
+            raise ValueError(f"ChainRig requires length >= 1, got {length}")
+        if link_width <= 0:
+            raise ValueError(f"ChainRig link_width must be positive, got {link_width}")
+        if link_height <= 0:
+            raise ValueError(f"ChainRig link_height must be positive, got {link_height}")
+        if density <= 0:
+            raise ValueError(f"ChainRig density must be positive, got {density}")
         self.links: list = []
 
         # Lay links out vertically downward so the chain starts near

@@ -44,6 +44,14 @@ class HingeMotorRig(Rig):
         max_force: float = 1e7,
     ) -> None:
         super().__init__()
+        # Validate that the entity has a Physics component with a body.
+        from strata.ecs.components import Physics
+        phys = entity.get_component(Physics)
+        if phys is None or phys.body is None:
+            raise ValueError(
+                "HingeMotorRig requires an entity with a Physics component "
+                "(created with physics=True). Got an entity without physics."
+            )
         # HingeMotorRig takes an existing entity — add_rig will call
         # add_entity on it (which is idempotent if already registered).
         self._entities = [entity]

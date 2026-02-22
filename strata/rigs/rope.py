@@ -51,6 +51,12 @@ class RopeRig(Rig):
         damping: float = 1.0,
     ) -> None:
         super().__init__()
+        if length < 1:
+            raise ValueError(f"RopeRig requires length >= 1, got {length}")
+        if bead_radius <= 0:
+            raise ValueError(f"RopeRig bead_radius must be positive, got {bead_radius}")
+        if density <= 0:
+            raise ValueError(f"RopeRig density must be positive, got {density}")
         self.beads: list = []
 
         for i in range(length):

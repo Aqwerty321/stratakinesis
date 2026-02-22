@@ -109,6 +109,9 @@ class Scene(World):
         scene.  All owned entities are added first (so their physics bodies
         exist), then ``rig._register()`` builds the pymunk constraints.
 
+        Idempotent — calling ``add_rig(rig)`` again for an already-registered
+        rig is a no-op (constraints are not duplicated).
+
         Parameters
         ----------
         rig : any Rig subclass (ChainRig, GearTrainRig, HingeMotorRig, ...).
@@ -119,6 +122,18 @@ class Scene(World):
         if self._physics_system is not None:
             rig._register(self._physics_system.space,
                           self._physics_system.static_body)
+
+    def remove_rig(self, rig: "Rig") -> None:  # type: ignore[name-defined]
+        """Remove all constraints and entities belonging to a Rig.
+
+        Tears down pymunk constraints first, then removes each entity
+        (which cleans up bodies, shapes, and tracking lists).
+        """
+        if self._physics_system is not None:
+            rig._unregister(self._physics_system.space)
+        for entity in rig._entities:
+            if entity in self._entities:
+                self.remove_entity(entity)
 
     def remove_entity(self, entity: Entity) -> None:
         """Remove an entity from the scene, cleaning up physics and soft-body state."""

@@ -96,6 +96,11 @@ class GearTrainRig(Rig):
 
         if not radii:
             raise ValueError("GearTrainRig requires at least one radius")
+        for i, r in enumerate(radii):
+            if r <= 0:
+                raise ValueError(
+                    f"GearTrainRig radii must all be positive, got radii[{i}]={r}"
+                )
 
         palette = colors or _PALETTE
         self.gears: list = []

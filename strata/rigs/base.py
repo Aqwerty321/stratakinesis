@@ -31,10 +31,15 @@ class JointHandle:
         """Called by Rig._register() once the pymunk constraint is built."""
         self._constraint = constraint
         for attr, val in self._pending.items():
+            if attr == 'enabled':
+                continue  # handled below
             try:
                 setattr(self._constraint, attr, val)
             except AttributeError:
                 pass  # not all constraint types have every attr
+        # Apply enabled state last — overrides max_force if disabled.
+        if not self._pending.get('enabled', True):
+            self._constraint.max_force = 0.0
 
     # --- rate (SimpleMotor) ---
 
@@ -65,7 +70,11 @@ class JointHandle:
     def max_force(self, value: float) -> None:
         self._pending['max_force'] = value
         if self._constraint is not None:
-            self._constraint.max_force = value
+            # Respect enabled state: if disabled, keep max_force at 0.
+            if self._pending.get('enabled', True):
+                self._constraint.max_force = value
+            # else: don't write to constraint; value is staged in _pending
+            # and will be applied when re-enabled.
 
     # --- enabled toggle (zeros max_force) ---
 
@@ -115,6 +124,11 @@ class Rig:
         #   _handle   : JointHandle
         #   **kwargs  : joint-specific parameters
         self._specs: list[dict] = []
+        # Live pymunk constraints built by _register(), used by _unregister()
+        # for clean teardown.
+        self._constraints: list[pymunk.Constraint] = []
+        # Whether _register() has been called (guards against double-add).
+        self._registered: bool = False
 
     @property
     def entities(self) -> list:
@@ -146,7 +160,12 @@ class Rig:
     # ------------------------------------------------------------------
 
     def _register(self, space: pymunk.Space, static_body: pymunk.Body) -> None:
-        """Build all pymunk constraints and add them to the space."""
+        """Build all pymunk constraints and add them to the space.
+
+        Idempotent — calling _register() a second time is a no-op.
+        """
+        if self._registered:
+            return
         from strata.ecs.components import Physics
 
         for spec in self._specs:
@@ -173,8 +192,23 @@ class Rig:
             constraint = self._build_constraint(spec, body_a, body_b)
             if constraint is not None:
                 space.add(constraint)
+                self._constraints.append(constraint)
                 handle: JointHandle = spec['_handle']
                 handle._attach(constraint)
+
+        self._registered = True
+
+    def _unregister(self, space: pymunk.Space) -> None:
+        """Remove all constraints built by _register() from the space."""
+        for c in self._constraints:
+            if c in space.constraints:
+                space.remove(c)
+        self._constraints.clear()
+        # Reset handles to unbuilt state.
+        for spec in self._specs:
+            handle: JointHandle = spec['_handle']
+            handle._constraint = None
+        self._registered = False
 
     # ------------------------------------------------------------------
     # Constraint factory
