@@ -1,6 +1,8 @@
-# STRATA — Engineered with Stratakinesis
-
 ![Stratakinesis](pictures/stratakinesis_title.jpeg)
+
+---
+
+# Engineered with Stratakinesis
 
 **Strata** is a deterministic, rigging-first 2D engine library for Python.
 pygame-ce for rendering · pymunk for physics · numpy / cupy for batch math.
